@@ -76,6 +76,23 @@ def start_screening_interface(df_scaffolds: pd.DataFrame) -> None:
         print("Error: The base Cations/Scaffolds DataFrame is empty.")
         return
 
+    # 1. Dynamic bounds configuration panel
+    limit_nb_widget = widgets.IntText(
+        value=2,
+        description='Max Subts:', 
+        tooltip='Max number of unique substituents loaded per site family'
+    )
+    max_comb_widget = widgets.IntText(
+        value=20000, 
+        description='Max Comb:', 
+        tooltip='Absolute ceiling for generated cations to protect server memory'
+    )
+    
+    config_panel = widgets.HBox(
+        [limit_nb_widget, max_comb_widget], 
+        layout=widgets.Layout(margin='0px 0px 15px 0px', padding='10px', border='1px dashed #ccc')
+    )
+
     mol_slider = widgets.IntSlider(value=0, min=0, max=len(df_scaffolds) - 1, description='Scaffold:')
     main_container = widgets.Output()
 
@@ -141,10 +158,15 @@ def start_screening_interface(df_scaffolds: pd.DataFrame) -> None:
                 btn_launch.description = "Processing Pipeline..."
                 btn_launch.button_style = 'warning'
 
+                # Capture core settings selected dynamically in the panel widgets
+                current_limit_nb = limit_nb_widget.value
+                current_max_comb = max_comb_widget.value
+
                 with main_container:
                     clear_output(wait=True)
                     display(widgets.HTML(
-                        "<h3 style='color: #d97706;'>🚀 Full Screening Pipeline in Progress... "
+                        f"<h3 style='color: #d97706;'>🚀 Full Screening Pipeline in Progress... "
+                        f"(Max Subts: {current_limit_nb}, Max Comb: {current_max_comb}) "
                         "Calculating descriptors and predictions. Please wait.</h3>"
                     ))
 
@@ -164,8 +186,12 @@ def start_screening_interface(df_scaffolds: pd.DataFrame) -> None:
 
                     # --- PIPELINE ORCHESTRATION EXECUTION ---
                     try:
-                        # Step 1: Combinatorial Generation
-                        run_generation(final_smiles_encoded)
+                        # Step 1: Combinatorial Generation using captured dynamic parameters
+                        run_generation(
+                            final_smiles_encoded, 
+                            limit_nb=current_limit_nb, 
+                            max_combinations=current_max_comb
+                        )
                         
                         # Step 2: SAScore filtering & Anion pairing
                         run_sascore_filtering()
@@ -208,6 +234,10 @@ def start_screening_interface(df_scaffolds: pd.DataFrame) -> None:
             on_cut_change({'new': ()})
 
     mol_slider.observe(refresh_dashboard, names='value')
+    
+    # Display config header panel along with controls
+    display(widgets.Label("🔧 Screening Bounds Settings:"))
+    display(config_panel)
     display(mol_slider)
     display(main_container)
     refresh_dashboard()

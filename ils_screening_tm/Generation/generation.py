@@ -15,9 +15,6 @@ logger = logging.getLogger("il_screening.generation")
 # --- CONFIGURATION & PATHS -------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parents[2]  # Points to Git/ root
 
-LIMIT_NB = 2
-MAX_COMBINATIONS = 20_000  # Hard ceiling to avoid runaway combinatorics
-
 FORBIDDEN_CONNECTIONS = {
     'N': ['F', 'Cl', 'Br', 'I', 'At', 'Ts', 'O', 'S', 'N'],
     'P': ['F', 'Cl', 'Br', 'I', 'At', 'Ts', 'O', 'S'],
@@ -67,7 +64,7 @@ def get_ligand_head_atom(pattern: str, typ: str) -> Optional[str]:
     return m.GetAtomWithIdx(0).GetSymbol()
 
 
-def load_substituents_filtered(substituents_df: pd.DataFrame, ligand_type_str: str, host_symbol: str) -> List[List[str]]:
+def load_substituents_filtered(substituents_df: pd.DataFrame, ligand_type_str: str, host_symbol: str, limit_nb: int) -> List[List[str]]:
     """Load and filter substituents that comply with local structural rules."""
     if 'Ligand' not in substituents_df.columns:
         return []
@@ -79,7 +76,7 @@ def load_substituents_filtered(substituents_df: pd.DataFrame, ligand_type_str: s
         head = get_ligand_head_atom(item[1], item[0])
         if head not in forbidden:
             filtered_list.append(item)
-            if len(filtered_list) >= LIMIT_NB:
+            if len(filtered_list) >= limit_nb:
                 break
     return filtered_list
 
@@ -113,7 +110,7 @@ class CombinationEncoded:
     def __init__(self):
         self.stats = CombinationStats()
 
-    def __call__(self, base_smiles_encoded: str, substituents_df: pd.DataFrame) -> List[Tuple[str, str]]:
+    def __call__(self, base_smiles_encoded: str, substituents_df: pd.DataFrame, limit_nb: int, max_combinations: int) -> List[Tuple[str, str]]:
         base_mol = Chem.MolFromSmiles(base_smiles_encoded)
         if not base_mol:
             logger.error("Could not parse base scaffold SMILES.")
@@ -140,14 +137,14 @@ class CombinationEncoded:
                 combs_config[m_type] = [()]
                 continue
             host = get_scaffold_host_atom(base_mol, type_to_int[m_type])
-            subs_list = load_substituents_filtered(sub_df, m_type, host)
+            subs_list = load_substituents_filtered(sub_df, m_type, host, limit_nb)
             if not subs_list:
                 logger.warning("No valid substituents found for site %s (host=%s).", m_type, host)
             combs_config[m_type] = list(product(subs_list, repeat=len(unique_groups))) or [()]
 
         estimated_total = len(combs_config["X"]) * len(combs_config["L"]) * len(combs_config["Z"])
-        if estimated_total > MAX_COMBINATIONS:
-            logger.warning("Estimated %d combinations exceeds cap of %d; truncating.", estimated_total, MAX_COMBINATIONS)
+        if estimated_total > max_combinations:
+            logger.warning("Estimated %d combinations exceeds cap of %d; truncating.", estimated_total, max_combinations)
             self.stats.combinatorics_truncated = True
 
         working_mol = Chem.RWMol(base_mol)
@@ -159,7 +156,7 @@ class CombinationEncoded:
         results = []
         for cX, cL, cZ in product(combs_config["X"], combs_config["L"], combs_config["Z"]):
             self.stats.total_generated += 1
-            if self.stats.total_generated > MAX_COMBINATIONS:
+            if self.stats.total_generated > max_combinations:
                 break
 
             try:
@@ -220,7 +217,7 @@ class CombinationEncoded:
 
 # --- ENTRY POINT FUNCTION --------------------------------------------------
 
-def run_generation(final_smiles_encoded: str) -> pd.DataFrame:
+def run_generation(final_smiles_encoded: str, limit_nb: int = 2, max_combinations: int = 20000) -> pd.DataFrame:
     """
     Executes Step 1 of the pipeline: Generates the combinatorial cation structures,
     applies structural rules, removes duplicates, and saves the result to output/.
@@ -233,7 +230,7 @@ def run_generation(final_smiles_encoded: str) -> pd.DataFrame:
     df_substituants = pd.read_csv(FICHIER_LIGANDS)
     
     combiner = CombinationEncoded()
-    generated_results = combiner(final_smiles_encoded, df_substituants)
+    generated_results = combiner(final_smiles_encoded, df_substituants, limit_nb=limit_nb, max_combinations=max_combinations)
     
     if not generated_results:
         raise ValueError("No structures survived the generation and initial structural filters.")
