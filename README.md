@@ -1,4 +1,4 @@
-i# ILs-screening-tm
+# ILs-screening-tm
 
 An interactive, modular screening tool for ionic liquid cation generation, structural filtering, synthetic accessibility scoring, and machine learning-driven melting point ($T_m$) prediction.
 
@@ -14,14 +14,17 @@ Git/
 ├── ils_screening_tm/          # Core production Python package
 │   ├── __init__.py
 │   ├── main.py                # Pipeline orchestrator & Interactive UI (ipywidgets)
+│   │
 │   ├── database/              # Fixed chemical databases
 │   │   ├── base_cations.csv
 │   │   ├── substituents_library.csv
 │   │   └── anions_library.csv
+│   │
 │   ├── models/                # Deep learning weights & feature scalers
 │   │   ├── pscnn_fold_1.keras ... pscnn_fold_5.keras
 │   │   ├── scaler_mordred.pkl
 │   │   └── for-external.pkl
+│   │
 │   ├── Generation/            # Step 1: Combinatorial generation engine
 │   ├── SAScore/               # Step 2: RDKit accessibility screening & pairing
 │   ├── Prediction_tm/         # Step 3: Mordred descriptor & CNN inference
@@ -42,7 +45,6 @@ Git/
 │
 ├── pyproject.toml
 └── README.md
-
 ---
 
 ## ⚙️ The 4-Step Screening Pipeline
@@ -96,6 +98,7 @@ df = pd.read_csv('../ils_screening_tm/database/base_cations.csv')
 
 # Render the interactive dashboard
 start_screening_interface(df)
+```
 
 ### 2. Live Statistics Dashboard Output
 Upon execution, a real-time tracking panel will render, enabling live slicing, atom cutting, and symmetry management. Clicking the "Launch Full Pipeline" button runs the 4 steps and outputs the following comprehensive analysis:
@@ -118,9 +121,10 @@ Upon execution, a real-time tracking panel will render, enabling live slicing, a
    (Scale: 1 = Very Easy, 10 = Extremely Difficult)
 ==================================================
 
-## Installation
+## 🛠️ Installation
 
 To install the production screening package and its absolute dependencies locally in editable development mode, clone the repository, navigate to the root folder containing `pyproject.toml`, and run:
 
 ```bash
 pip install -e .
+```
