@@ -1,0 +1,2 @@
+recursive-include ils_screening_tm/database *.csv
+recursive-include ils_screening_tm/models *.keras *.pkl
