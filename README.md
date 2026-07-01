@@ -126,10 +126,21 @@ Upon execution, a real-time tracking panel will render, enabling live slicing, a
    (Scale: 1 = Very Easy, 10 = Extremely Difficult)
 ==================================================
 ```
-## 🛠️ Installation
+# 📦 Installation & Local Usage
 
-To install the production screening package and its absolute dependencies locally in editable development mode, clone the repository, navigate to the root folder containing `pyproject.toml`, and run:
+
+### Standard Installation (via PyPI)
+
+If you prefer to run the screening pipeline locally on your machine, the package is officially hosted on PyPI. You can install it and all its core dependencies with a single command:
+
 
 ```bash
-pip install -e .
+
+pip install ils-screening-tm
+```
+### Local Installation
+
+To install the package in editable development mode (useful if you want to modify the source code), clone the repository and run from the root directory:
+```
+pip install -e . 
 ```
