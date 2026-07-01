@@ -81,6 +81,32 @@ When executed via the interactive dashboard, the package orchestrates a sequenti
 - Renders a 2D high-resolution molecular grid (Cation alongside Anion) inside the notebook layout.
 
 ---
+## 🎛️ Interactive Dashboard Features
+
+The screening pipeline comes with an intuitive `ipywidgets`-based graphical interface that allows you to easily configure your structural modifications and screening constraints in real-time.
+
+### 1. Screening Bounds Settings (Advanced Performance)
+At the top of the interface, you will find two direct numeric entry boxes to protect your workstation or server memory against combinatorics explosions:
+* **`Max Subts`**: Controls the maximum number of unique substituents loaded from your library for each active chemical site family.
+* **`Max Comb`**: Sets a hard absolute ceiling for the total number of generated cation structures. If the combinatorics estimation exceeds this number, the generation safely truncates to prevent *Out of Memory* crashes (highly recommended when running on free cloud environments like Google Colab).
+
+### 2. Scaffold Selection & Core Slicing
+* **Scaffold Slider**: Scroll through your available base cation scaffolds from the loaded database (index from `0` to `6`). The index mapping corresponds to the following chemical families:
+  * `0`: Pyrrolidinium
+  * `1`: Pyridinium
+  * `2`: Piperidinium
+  * `3`: Ammonium
+  * `4`: Phosphonium
+  * `5`: Sulfonium
+  * `6`: Imidazolium
+* **Cut Atoms Selector**: Select one or multiple atom indices to dynamically remove them from the structure, opening up new coordination sites for branching.
+
+### 3. Symmetry Configuration & Launch
+* **Symmetry Dropdowns**: Once an anchor placeholder (`[*]`) is detected on the remaining core structure, dropdown menus automatically appear to configure architectural symmetries.
+* **Launch Button**: Triggers the 4-step pipeline sequentially: *Combinatorial Generation* $\rightarrow$ *SAScore & Anion Crossover* $\rightarrow$ *Deep Learning $T_m$ Forecasting* $\rightarrow$ *Visual Sampling*.
+
+---
+
 ## 🚀 Execution & Interactive UI
 
 Testing and running the pipeline is containerized inside the `tests/` directory to protect production code from volatile Jupyter execution paths.
@@ -126,6 +152,8 @@ Upon execution, a real-time tracking panel will render, enabling live slicing, a
    (Scale: 1 = Very Easy, 10 = Extremely Difficult)
 ==================================================
 ```
+---
+
 # 📦 Installation & Local Usage
 
 
