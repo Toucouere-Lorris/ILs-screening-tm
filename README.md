@@ -10,6 +10,7 @@ This repository decouples core chemical and deep learning calculations from the 
 
 The repository is organized into distinct structural layers following software development standards:
 
+```text
 Git/
 ├── ils_screening_tm/          # Core production Python package
 │   ├── __init__.py
@@ -45,6 +46,7 @@ Git/
 │
 ├── pyproject.toml
 └── README.md
+```
 ---
 
 ## ⚙️ The 4-Step Screening Pipeline
@@ -120,7 +122,7 @@ Upon execution, a real-time tracking panel will render, enabling live slicing, a
    Average SAScore                   : 5.82
    (Scale: 1 = Very Easy, 10 = Extremely Difficult)
 ==================================================
-
+```
 ## 🛠️ Installation
 
 To install the production screening package and its absolute dependencies locally in editable development mode, clone the repository, navigate to the root folder containing `pyproject.toml`, and run:
