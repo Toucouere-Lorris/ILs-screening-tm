@@ -673,11 +673,14 @@ def demarrer_interface_strict(df_cations: pd.DataFrame, df_substituants: pd.Data
             new_mol = remove_atoms_interactive(mol, selected_atoms)
             anchors_found = {1: [], 2: [], 3: []}
             for atom in new_mol.GetAtoms():
-                map_num = atom.GetAtomMapNum()
-                if map_num > 100:
-                    raw_type = map_num // 100
-                    if raw_type in anchors_found:
-                        anchors_found[raw_type].append(atom.GetIdx())
+                raw_type = atom.GetIsotope() or atom.GetAtomMapNum()
+                
+                # Si c'est un grand tag (ex: 201, 301), on prend la centaine
+                if raw_type > 100:
+                    raw_type = raw_type // 100
+                    
+                if raw_type in anchors_found:
+                    anchors_found[raw_type].append(atom.GetIdx())
 
             widgets_groupes = [widgets.HTML("<b>3. Detected Symmetries</b>")]
             current_dd_widgets = {}
