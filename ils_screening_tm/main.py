@@ -327,6 +327,21 @@ class ILsScreening:
         self.fichier_anions = os.path.join(base_dir, 'data', 'anions_library.csv')
         self.ch_models = os.path.join(base_dir, 'Models')
 
+    def __repr__(self) -> str:
+        """Custom clean string representation for Jupyter notebooks display."""
+        if self.df is None:
+            return "ILsScreening Pipeline (Status: Empty Sandbox)"
+
+        # Détection dynamique de l'état d'avancement de la base
+        if 'Predicted_Tm_C' in self.df.columns:
+            status = f"Screened Library ({len(self.df)} salts with predicted Tm)"
+        elif 'Anion_SMILES' in self.df.columns:
+            status = f"Paired Library ({len(self.df)} salt configurations)"
+        else:
+            status = f"Generated Cations Registry ({len(self.df)} structures)"
+
+        return f"ILsScreening Pipeline (Status: {status})"
+
     def set_scaffold(self, smiles: str) -> "ILsScreening":
         """Sets the active molecular scaffold target structure string."""
         self.encoded_smiles = smiles
