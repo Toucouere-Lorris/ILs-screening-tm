@@ -130,20 +130,7 @@ class CombinationEncoded:
     """
 
     def __init__(self):
-        """Initializes internal active database storage configurations using robust 
-        absolute paths relative to the package location.
-        """
-        self.df: Optional[pd.DataFrame] = None
-        self.encoded_smiles: Optional[str] = None
-
-        # 🎯 Détection automatique du dossier racine du package (ils_screening_tm/)
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-
-        # Configuration des chemins absolus stables
-        self.fichier_cations = os.path.join(base_dir, 'data', 'base_cations.csv')
-        self.fichier_substituants = os.path.join(base_dir, 'data', 'substituents_library.csv')
-        self.fichier_anions = os.path.join(base_dir, 'data', 'anions_library.csv')
-        self.ch_models = os.path.join(base_dir, 'Models')
+        self.stats = CombinationStats()
         
 
     def __call__(self, base_smiles_encoded: str, substituants_df: pd.DataFrame, limit_nb: int, max_combinations: int):
@@ -332,10 +319,13 @@ class ILsScreening:
         self.df: Optional[pd.DataFrame] = None
         self.encoded_smiles: Optional[str] = None
 
-        self.fichier_cations = os.path.join('data', 'base_cations.csv')
-        self.fichier_substituants = os.path.join('data', 'substituents_library.csv')
-        self.fichier_anions = os.path.join('data', 'anions_library.csv')
-        self.ch_models = 'Models'
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # Configuration des chemins absolus stables pour éviter les FileNotFoundError
+        self.fichier_cations = os.path.join(base_dir, 'data', 'base_cations.csv')
+        self.fichier_substituants = os.path.join(base_dir, 'data', 'substituents_library.csv')
+        self.fichier_anions = os.path.join(base_dir, 'data', 'anions_library.csv')
+        self.ch_models = os.path.join(base_dir, 'Models')
 
     def set_scaffold(self, smiles: str) -> "ILsScreening":
         """Sets the active molecular scaffold target structure string."""
