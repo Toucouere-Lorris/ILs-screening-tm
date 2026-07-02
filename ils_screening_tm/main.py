@@ -360,6 +360,13 @@ class ILsScreening:
         # Clears any existing dataframe memory from previous pipeline runs
         self.df = None
 
+        # 🛡️ SÉCURITÉ ABSOLUE DIRECTE : Recalcul forcé des chemins absolus au moment de l'appel
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.fichier_cations = os.path.join(base_dir, 'data', 'base_cations.csv')
+        self.fichier_substituants = os.path.join(base_dir, 'data', 'substituents_library.csv')
+        self.fichier_anions = os.path.join(base_dir, 'data', 'anions_library.csv')
+        self.ch_models = os.path.join(base_dir, 'Models')
+
         if not self.encoded_smiles:
             print("💡 No scaffold layout defined. Launching interactive Widget interface...")
             try:
