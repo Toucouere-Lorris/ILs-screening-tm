@@ -673,9 +673,11 @@ def demarrer_interface_strict(df_cations: pd.DataFrame, df_substituants: pd.Data
             new_mol = remove_atoms_interactive(mol, selected_atoms)
             anchors_found = {1: [], 2: [], 3: []}
             for atom in new_mol.GetAtoms():
-                raw_type = atom.GetIsotope() or atom.GetAtomMapNum()
-                if raw_type in anchors_found:
-                    anchors_found[raw_type].append(atom.GetIdx())
+                map_num = atom.GetAtomMapNum()
+                if map_num > 100:
+                    raw_type = map_num // 100
+                    if raw_type in anchors_found:
+                        anchors_found[raw_type].append(atom.GetIdx())
 
             widgets_groupes = [widgets.HTML("<b>3. Detected Symmetries</b>")]
             current_dd_widgets = {}
