@@ -8,6 +8,8 @@ You can run the entire interactive pipeline directly in your browser without ins
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Toucouere-Lorris/ILs-screening-tm/blob/main/tests/test_pipeline_GC.ipynb)
 ---
+![Graphical Abstract](docs/graphical_abstract.svg)
+---
 
 ## 📂 Repository Structure
 
