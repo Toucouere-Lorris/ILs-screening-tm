@@ -509,6 +509,9 @@ class ILsScreening:
         prop = prop.lower()
         kind = kind.lower()
         
+        # Identification dynamique de la colonne SMILES
+        smiles_col = 'SMILES' if 'SMILES' in self.df.columns else 'Cation_SMILES'
+        
         if prop == 'auto':
             prop = 'tm' if 'Predicted_Tm_C' in self.df.columns else 'sascore'
 
@@ -522,7 +525,7 @@ class ILsScreening:
             if 'SAScore' not in self.df.columns:
                 raise ValueError("❌ 'SAScore' column missing. Run .sascore() before plotting.")
 
-            unique_cats = self.df.sort_values(by='SAScore').drop_duplicates(subset=['Cation_SMILES'])
+            unique_cats = self.df.sort_values(by='SAScore').drop_duplicates(subset=[smiles_col])
             n_cats = len(unique_cats)
 
             if kind == 'dist':
@@ -539,13 +542,12 @@ class ILsScreening:
                 plt.show()
 
             elif kind == 'matrix':
-                # 🛡️ CAP DE SÉCURITÉ : Sub-sampling si trop de cations
                 if n_cats > max_display:
-                    print(f"📈 [Plot] Library contains {n_cats} unique cations. Sub-sampling down to the top {max_display} candidates for matrix clarity.")
-                    unique_cats = unique_cats.head(max_display) # ou .sample(max_display, random_state=42) pour du random
+                    print(f"📈 [Plot] Library contains {n_cats} unique cations. Sub-sampling to {max_display} candidates.")
+                    unique_cats = unique_cats.head(max_display)
                 
                 print(f"🧬 [Plot] Generating Cation Cross-Similarity Matrix...")
-                mols = [Chem.MolFromSmiles(s) for s in unique_cats['Cation_SMILES']]
+                mols = [Chem.MolFromSmiles(s) for s in unique_cats[smiles_col]]
                 fps = [AllChem.GetMorganFingerprintAsBitVect(m, 2, nBits=2048) for m in mols if m is not None]
                 
                 sim_matrix = np.zeros((len(fps), len(fps)))
@@ -553,7 +555,7 @@ class ILsScreening:
                     for j in range(len(fps)):
                         sim_matrix[i, j] = DataStructs.TanimotoSimilarity(fps[i], fps[j])
 
-                labels = [f"{row['Cation_SMILES'][:8]}.. (SA:{row['SAScore']:.1f})" for _, row in unique_cats.iterrows()]
+                labels = [f"{row[smiles_col][:8]}.. (SA:{row['SAScore']:.1f})" for _, row in unique_cats.iterrows()]
 
                 plt.figure(figsize=(11, 9))
                 sns.heatmap(sim_matrix, xticklabels=labels, yticklabels=labels, cmap="viridis", 
@@ -592,13 +594,13 @@ class ILsScreening:
             elif kind == 'matrix':
                 plot_df = self.df.copy()
                 
-                # 🛡️ CAP DE SÉCURITÉ : Sub-sampling si trop de paires d'Iils
                 if len(plot_df) > max_display:
-                    print(f"📈 [Plot] Matrix density high ({len(plot_df)} salts). Down-sampling to a random sample of {max_display} lines for visibility.")
+                    print(f"📈 [Plot] Matrix density high ({len(plot_df)} salts). Sampling {max_display} for visibility.")
                     plot_df = plot_df.sample(n=max_display, random_state=42)
 
                 print(f"📊 [Plot] Generating Cation-Anion Matrix Grid Heatmap...")
-                plot_df['Cat_Label'] = plot_df['Cation_SMILES'].apply(lambda s: s[:10] + '...')
+                # Utilise smiles_col pour les cations dans la matrice
+                plot_df['Cat_Label'] = plot_df[smiles_col].apply(lambda s: s[:10] + '...')
                 plot_df['An_Label'] = plot_df['Anion_SMILES'].apply(lambda s: s[:10] + '...')
                 matrix = plot_df.pivot_table(index='Cat_Label', columns='An_Label', values='Predicted_Tm_C')
 
