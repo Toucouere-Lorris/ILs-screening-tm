@@ -482,65 +482,106 @@ class ILsScreening:
         print(f"📉 [Tm Filter] {len(self.df)} / {before_count} liquid salts survived ceiling check (<= {threshold_c}°C).")
         return self
 
-    def heatmap(self, mode: str = 'auto') -> "ILsScreening":
-        """Step 4: Generates a scalable diagnostic plot layout.
+    def plot(self, prop: str = 'auto', kind: str = 'dist', max_display: int = 50) -> "ILsScreening":
+        """
+        Generates advanced diagnostic plots for the ongoing screening workflow.
 
         Parameters:
         -----------
-        mode : str, default 'auto'
-            The data column to analyze. Options are:
-            - 'auto'   : Plots Tm if available, otherwise falls back to SAScore.
-            - 'tm'     : Forces the melting point matrix/distribution plot.
-            - 'sascore': Forces the cation synthetic accessibility histogram.
+        prop : str, default 'auto'
+            The chemical or structural property to analyze ('sascore' or 'tm').
+        kind : str, default 'dist'
+            The layout structure of the graphic ('dist' or 'matrix').
+        max_display : int, default 50
+            The maximum number of rows/molecules to display in matrix modes 
+            to ensure readability. High-density datasets will be automatically sub-sampled.
         """
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        import numpy as np
+        from rdkit import Chem
+        from rdkit.Chem import AllChem
+        from rdkit import DataStructs
+
         if self.df is None or self.df.empty:
             raise ValueError("❌ Active database is empty. Run .generation() first.")
 
-        # Validation du paramètre mode
-        mode = mode.lower()
-        if mode not in ['auto', 'tm', 'sascore']:
-            raise ValueError("❌ Invalid mode. Choose between 'auto', 'tm', or 'sascore'.")
+        prop = prop.lower()
+        kind = kind.lower()
+        
+        if prop == 'auto':
+            prop = 'tm' if 'Predicted_Tm_C' in self.df.columns else 'sascore'
 
-        # Résolution du mode automatique
-        if mode == 'auto':
-            if 'Predicted_Tm_C' in self.df.columns:
-                target_mode = 'tm'
-            elif 'SAScore' in self.df.columns:
-                target_mode = 'sascore'
-            else:
-                raise ValueError("❌ Data footprint insufficient for 'auto' mode. Run .sascore() or .tm() first.")
-        else:
-            target_mode = mode
+        if prop not in ['sascore', 'tm'] or kind not in ['dist', 'matrix']:
+            raise ValueError("❌ Invalid parameters. Use prop=['sascore','tm'] and kind=['dist','matrix'].")
 
-        # --- MODE 1 : THERMAL PROP (MELTING POINT) ---
-        if target_mode == 'tm':
-            if 'Predicted_Tm_C' not in self.df.columns:
-                raise ValueError("❌ 'Predicted_Tm_C' column missing. You must run .tm() before plotting thermal data.")
+        # =========================================================================
+        # --- CASE A: SYNTHETIC ACCESSIBILITY DIAGNOSTICS (SASCORE) ---
+        # =========================================================================
+        if prop == 'sascore':
+            if 'SAScore' not in self.df.columns:
+                raise ValueError("❌ 'SAScore' column missing. Run .sascore() before plotting.")
 
-            n_rows = len(self.df)
-            if n_rows <= 50:
-                print(f"📊 [Visualization] Generating matrix pivot heatmap ({n_rows} pairs)...")
-                plot_df = self.df.copy()
-                plot_df['Cat_Label'] = plot_df['Cation_SMILES'].apply(lambda s: s[:10] + '...')
-                plot_df['An_Label'] = plot_df['Anion_SMILES'].apply(lambda s: s[:10] + '...')
-                matrix = plot_df.pivot_table(index='Cat_Label', columns='An_Label', values='Predicted_Tm_C')
+            unique_cats = self.df.sort_values(by='SAScore').drop_duplicates(subset=['Cation_SMILES'])
+            n_cats = len(unique_cats)
 
-                plt.figure(figsize=(10, 8))
-                sns.heatmap(matrix, annot=True, fmt=".1f", cmap="coolwarm", cbar_kws={'label': 'Predicted Tm (°C)'})
-                plt.title("Ionic Liquid Library Screening - Melting Point Heatmap")
+            if kind == 'dist':
+                print(f"📊 [Plot] Generating Cations SAScore distribution histogram ({n_cats} unique cations)...")
+                plt.figure(figsize=(10, 5))
+                sns.histplot(data=unique_cats, x='SAScore', kde=True, color="teal", bins=15, alpha=0.6)
+                plt.axvline(x=6.0, color='crimson', linestyle=':', linewidth=2, label='High Synthetic Difficulty Limit (6.0)')
+                plt.title("Distribution of Synthetic Accessibility Scores (SAScore)", fontsize=13)
+                plt.xlabel("SAScore (1 = Easy, 10 = Hard)", fontsize=11)
+                plt.ylabel("Count of Cations", fontsize=11)
+                plt.legend()
+                plt.grid(axis='both', linestyle=':', alpha=0.5)
                 plt.tight_layout()
                 plt.show()
-            else:
-                print(f"📈 [Visualization] Dataset too large ({n_rows} pairs). Swapping to Distribution Violin Plot...")
+
+            elif kind == 'matrix':
+                # 🛡️ CAP DE SÉCURITÉ : Sub-sampling si trop de cations
+                if n_cats > max_display:
+                    print(f"📈 [Plot] Library contains {n_cats} unique cations. Sub-sampling down to the top {max_display} candidates for matrix clarity.")
+                    unique_cats = unique_cats.head(max_display) # ou .sample(max_display, random_state=42) pour du random
+                
+                print(f"🧬 [Plot] Generating Cation Cross-Similarity Matrix...")
+                mols = [Chem.MolFromSmiles(s) for s in unique_cats['Cation_SMILES']]
+                fps = [AllChem.GetMorganFingerprintAsBitVect(m, 2, nBits=2048) for m in mols if m is not None]
+                
+                sim_matrix = np.zeros((len(fps), len(fps)))
+                for i in range(len(fps)):
+                    for j in range(len(fps)):
+                        sim_matrix[i, j] = DataStructs.TanimotoSimilarity(fps[i], fps[j])
+
+                labels = [f"{row['Cation_SMILES'][:8]}.. (SA:{row['SAScore']:.1f})" for _, row in unique_cats.iterrows()]
+
+                plt.figure(figsize=(11, 9))
+                sns.heatmap(sim_matrix, xticklabels=labels, yticklabels=labels, cmap="viridis", 
+                            annot=len(unique_cats) <= 15, fmt=".2f", cbar_kws={'label': 'Tanimoto Structural Similarity (0 to 1)'})
+                plt.title("Cation-Cation Cross-Similarity Heatmap (Ordered by SAScore)", fontsize=13)
+                plt.xticks(rotation=45, ha='right')
+                plt.tight_layout()
+                plt.show()
+
+        # =========================================================================
+        # --- CASE B: THERMAL INFRASTRUCTURE (MELTING POINT) ---
+        # =========================================================================
+        elif prop == 'tm':
+            if 'Predicted_Tm_C' not in self.df.columns:
+                raise ValueError("❌ 'Predicted_Tm_C' column missing. Run .tm() before plotting.")
+            
+            n_rows = len(self.df)
+
+            if kind == 'dist':
+                print(f"📈 [Plot] Generating Thermal Distribution Violin Plot ({n_rows} paired entries)...")
                 plt.figure(figsize=(12, 6))
                 plot_df = self.df.copy()
                 plot_df['Anion_Short'] = plot_df['Anion_SMILES'].apply(lambda s: s[:15] + '...' if len(s) > 15 else s)
 
                 sns.violinplot(data=plot_df, x='Anion_Short', y='Predicted_Tm_C', palette="Set2", inner="box")
                 plt.axhline(y=100.0, color='red', linestyle='--', linewidth=2, label='IL Limit Ceiling (100 °C)')
-
                 plt.xticks(rotation=45, ha='right')
-                plt.title("Distribution profile of Melting Points Across Generated Anions Families", fontsize=14)
+                plt.title("Distribution Profile of Melting Points Across Generated Anions Families", fontsize=14)
                 plt.ylabel("Predicted Tm (°C)", fontsize=12)
                 plt.xlabel("Anion SMILES Family Structures", fontsize=12)
                 plt.legend(loc="upper right")
@@ -548,24 +589,24 @@ class ILsScreening:
                 plt.tight_layout()
                 plt.show()
 
-        # --- MODE 2 : SYNTHETIC PROP (SASCORE) ---
-        elif target_mode == 'sascore':
-            if 'SAScore' not in self.df.columns:
-                raise ValueError("❌ 'SAScore' column missing. You must run .sascore() before plotting structural diagnostics.")
+            elif kind == 'matrix':
+                plot_df = self.df.copy()
+                
+                # 🛡️ CAP DE SÉCURITÉ : Sub-sampling si trop de paires d'Iils
+                if len(plot_df) > max_display:
+                    print(f"📈 [Plot] Matrix density high ({len(plot_df)} salts). Down-sampling to a random sample of {max_display} lines for visibility.")
+                    plot_df = plot_df.sample(n=max_display, random_state=42)
 
-            print("📊 [Visualization] Plotting Cations SAScore distribution histogram...")
-            plt.figure(figsize=(10, 5))
+                print(f"📊 [Plot] Generating Cation-Anion Matrix Grid Heatmap...")
+                plot_df['Cat_Label'] = plot_df['Cation_SMILES'].apply(lambda s: s[:10] + '...')
+                plot_df['An_Label'] = plot_df['Anion_SMILES'].apply(lambda s: s[:10] + '...')
+                matrix = plot_df.pivot_table(index='Cat_Label', columns='An_Label', values='Predicted_Tm_C')
 
-            sns.histplot(data=self.df, x='SAScore', kde=True, color="teal", bins=15, alpha=0.6)
-            plt.axvline(x=6.0, color='crimson', linestyle=':', linewidth=2, label='High Synthetic Difficulty Limit (6.0)')
-
-            plt.title("Distribution of Synthetic Accessibility Scores (SAScore) for Generated Cations", fontsize=13)
-            plt.xlabel("SAScore (1 = Easy, 10 = Hard)", fontsize=11)
-            plt.ylabel("Count of Cations", fontsize=11)
-            plt.legend()
-            plt.grid(axis='both', linestyle=':', alpha=0.5)
-            plt.tight_layout()
-            plt.show()
+                plt.figure(figsize=(10, 8))
+                sns.heatmap(matrix, annot=len(plot_df) <= 40, fmt=".1f", cmap="coolwarm", cbar_kws={'label': 'Predicted Tm (°C)'})
+                plt.title("Ionic Liquid Library Screening - Melting Point Matrix Heatmap")
+                plt.tight_layout()
+                plt.show()
 
         return self
 
@@ -623,6 +664,50 @@ class ILsScreening:
                 # Pour les cations seuls, on peut les afficher sur 3 colonnes pour économiser de l'espace
                 grid = Draw.MolsToGridImage(mols, molsPerRow=3, subImgSize=(250, 250), legends=legends)
                 display(grid)
+
+        return self
+
+    def save(self, filename: str, columns: list = None):
+        """
+        Saves the current internal dataframe state (self.df) to a file.
+        Supports both CSV (.csv) and Excel (.xlsx) formats based on the file extension.
+
+        Parameters:
+        -----------
+        filename : str
+            The target file path (e.g., 'output_results.csv' or 'data/screened_ils.xlsx').
+        columns : list, optional
+            A specific list of columns to export. If None, exports everything available.
+            Examples of useful columns:
+            - After .generation(): ['cation_smiles']
+            - After .sascore():    ['cation_smiles', 'anion_smiles', 'sascore']
+            - After .tm():         ['cation_smiles', 'anion_smiles', 'sascore', 'predicted_tm']
+
+        Returns:
+        --------
+        self : ILsScreening
+            Returns self to preserve the fluent method chaining syntax.
+        """
+        if self.df is None or self.df.empty:
+            print("⚠ Warning: The tracking dataframe is empty or has not been initialized yet. Nothing to save.")
+            return self
+
+        # Determine which columns to save
+        df_to_save = self.df[columns] if columns is not None else self.df
+
+        # Check format based on file extension
+        if filename.endswith('.csv'):
+            df_to_save.to_csv(filename, index=False)
+            print(f"✓ Successfully exported {len(df_to_save)} rows to CSV: '{filename}'")
+        elif filename.endswith('.xlsx'):
+            try:
+                # openpyxl is required for pandas excel export
+                df_to_save.to_excel(filename, index=False, engine='openpyxl')
+                print(f"✓ Successfully exported {len(df_to_save)} rows to Excel: '{filename}'")
+            except ImportError:
+                print("❌ Error: 'openpyxl' package is missing. Please run 'pip install openpyxl' to export to Excel.")
+        else:
+            print(f"❌ Error: Unsupported file format for '{filename}'. Please use a '.csv' or '.xlsx' extension.")
 
         return self
 
