@@ -81,9 +81,10 @@ def run_visualization(sample_size: int = 4) -> None:
             # Injection dynamique de la valeur SAScore individuelle sous la structure du Cation
             sas_info = f" | SAScore: {row['SAScore']:.1f}" if 'SAScore' in row else ""
             
+            # Légende pour le Cation, et chaîne vide pour masquer totalement la légende de l'anion
             legends_to_display.extend([
                 f"Candidate {idx} - Cation{sas_info}",
-                f"Anion: {row['Anion_Name']} ({row['Predicted_Tm_C']:.1f}°C)",
+                "", 
             ])
 
     if mols_to_display:

@@ -89,17 +89,17 @@ def run_sascore_filtering() -> pd.DataFrame:
         
     df_anions = pd.read_csv(FICHIER_ANIONS)
     
-    # MODIFICATION ICI : On garde 'SMILES' ET 'SAScore' dans le sous-ensemble de données
+    # Prepare dataframes for the cross join
     df_cations_prep = df_cations_filtered[['SMILES', 'SAScore']].rename(columns={'SMILES': 'Cation_SMILES'})
-    df_anions_prep = df_anions[['Abbreviation', 'SMILES']].rename(
-        columns={'Abbreviation': 'Anion_Name', 'SMILES': 'Anion_SMILES'}
-    )
     
-    # Le produit cartésien propage automatiquement le SAScore sur chaque ligne de paire créée
+    # MODIFICATION HERE: Only extract and rename 'SMILES' since 'Abbreviation' was removed
+    df_anions_prep = df_anions[['SMILES']].rename(columns={'SMILES': 'Anion_SMILES'})
+    
+    # The cross-join operation automatically propagates the SAScore to each generated pair
     df_pairs = pd.merge(df_cations_prep, df_anions_prep, how='cross')
     
-    # MODIFICATION ICI : On ajoute explicitement 'SAScore' à la liste des colonnes du fichier final de l'étape 2
-    df_final_pairs = df_pairs[['Anion_Name', 'Cation_SMILES', 'Anion_SMILES', 'SAScore']].copy()
+    # MODIFICATION HERE: Removed 'Anion_Name' from the final columns footprint
+    df_final_pairs = df_pairs[['Cation_SMILES', 'Anion_SMILES', 'SAScore']].copy()
     
     # 4. Save checkpoint to output/
     os.makedirs(os.path.dirname(FICHIER_SORTIE_FUSION), exist_ok=True)
