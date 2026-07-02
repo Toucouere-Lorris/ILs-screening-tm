@@ -7,6 +7,7 @@ This repository decouples core chemical and deep learning calculations from the 
 You can run the entire interactive pipeline directly in your browser without installing anything locally. Click the badge below to launch the pre-configured environment in Google Colab (remember to run the setup cell at the top to initialize the environment and display the interactive UI):
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Toucouere-Lorris/ILs-screening-tm/blob/main/tests/test_pipeline_GC.ipynb)
+
 ---
 ![Graphical Abstract](docs/graphical_abstract.svg)
 ---
@@ -19,27 +20,17 @@ The repository is organized into distinct structural layers following software d
 Git/
 ├── ils_screening_tm/          # Core production Python package
 │   ├── __init__.py
-│   ├── main.py                # Pipeline orchestrator & Interactive UI (ipywidgets)
+│   ├── main.py                # Class ILsScreening, Pipeline orchestrator & UI (ipywidgets)
 │   │
-│   ├── database/              # Fixed chemical databases
+│   ├── data/                  # Fixed chemical source libraries
 │   │   ├── base_cations.csv
 │   │   ├── substituents_library.csv
 │   │   └── anions_library.csv
 │   │
-│   ├── models/                # Deep learning weights & feature scalers
-│   │   ├── pscnn_fold_1.keras ... pscnn_fold_5.keras
-│   │   ├── scaler_mordred.pkl
-│   │   └── for-external.pkl
-│   │
-│   ├── Generation/            # Step 1: Combinatorial generation engine
-│   ├── SAScore/               # Step 2: RDKit accessibility screening & pairing
-│   ├── Prediction_tm/         # Step 3: Mordred descriptor & CNN inference
-│   └── Display/               # Step 4: Visual analytics & structural rendering
-│
-├── output/                    # Generated pipeline checkpoints and final datasets
-│   ├── generated_cations_raw.csv     # Output from Step 1
-│   ├── ionic_liquids_raw_pairs.csv   # Output from Step 2
-│   └── ionic_liquids_filtered_tm.csv # Ultimate Target Dataset (Step 3 & 4)
+│   └── Models/                # Deep learning weights & feature scalers
+│       ├── pscnn_fold_1.keras ... pscnn_fold_5.keras
+│       ├── scaler_mordred.pkl
+│       └── for-external.pkl
 │
 ├── tests/                     # Interactive testing & Validation notebooks
 │   └── test_pipeline.ipynb    # Demo notebook to launch the UI
@@ -52,125 +43,101 @@ Git/
 ├── pyproject.toml
 └── README.md
 ```
----
 
-## ⚙️ The 4-Step Screening Pipeline
+## ⚙️ The Fluent Screening Pipeline Workflow
 
-When executed via the interactive dashboard, the package orchestrates a sequential 4-step pipeline using the `output/` directory to store intermediate results:
+The package orchestrates a sequential pipeline using an object-oriented API with method chaining (`.generation().sascore().tm()`). All calculations modify an internal `self.df` state registry in memory, bypassing unnecessary disk read/write overhead:
 
-### Step 1: Combinatorial Cation Generation (`Generation/`)
-- Takes an atom-map-encoded scaffold selected in the UI.
-- Applies combinatorial functional group grafting using local connection matrix rules.
-- Filters out non-compliant structures based on custom structural SMARTS filters.
-- Saves unique generated scaffolds to `output/generated_cations_raw.csv`.
+### 1. Scaffold Selection & UI Interaction (`.generation()`)
+* **Interactive Trigger:** If no scaffold is pre-set, calling this method automatically launches the interactive visual ipywidgets environment to choose a base cation, cut specific atom indices, and configure local anchor symmetries/groups dynamically.
+* **Library Expansion:** Generates a library of combinatorially substituted cations using functional group fragments and connection rules.
 
-### Step 2: Synthetic Accessibility Filtering & Anion Pairing (`SAScore/`)
-- Computes SAScores (via RDKit contributions) for every single unique cation.
-- Enforces a strict synthesis gate (<= 6.0) to discard overly complex or unstable chemical entities.
-- Performs a cross-join (product cartesian) between surviving cations and the standard anion library.
-- Saves fully-paired salt structures alongside their cation SAScore to `output/ionic_liquids_raw_pairs.csv`.
+### 2. Synthetic Accessibility Filtering & Anion Pairing (`.sascore()`)
+* Computes SAScores (via RDKit contributions) for every single unique cation.
+* Enforces a strict synthesis gate (default `threshold=6.0`) to discard overly complex or unstable chemical entities.
+* Automatically triggers a cross-join (product cartesian) with the package's internal anion library to build the complete salt matrix.
 
-### Step 3: Deep Learning Tm Prediction (`Prediction_tm/`)
-- Computes 209 mathematical Mordred structural descriptors for both the cation and anion blocks.
-- Standardizes feature blocks using pre-trained scalers.
-- Feeds data into a 5-Fold Cross-Validation Ensemble of Parallel-Scaffold Convolutional Neural Networks (PSCNN).
-- Computes the ensemble average melting point and applies a room-temperature/low-melting screening threshold (Tm <= 100°C).
-- Saves the final screened dataset containing both Tm and SAScore properties to `output/ionic_liquids_filtered_tm.csv`.
+### 3. Deep Learning $T_m$ Prediction (`.tm()`)
+* Computes 209 mathematical Mordred structural descriptors for both the cation and anion blocks.
+* Standardizes feature blocks using pre-trained scalers and feeds data into a 5-Fold Cross-Validation Ensemble of Parallel-Scaffold Convolutional Neural Networks (PSCNN).
+* Computes the ensemble average melting point and applies a room-temperature/low-melting screening threshold (default $T_m \le 100^\circ\text{C}$).
 
-### Step 4: Visual Analytics & Reporting (`Display/`)
-- Outputs a formatted cross-statistical summary report in the terminal (min, max, average values for both Tm and SAScores).
-- Performs a randomized sample extraction from the top stable candidates.
-- Renders a 2D high-resolution molecular grid (Cation alongside Anion) inside the notebook layout.
+### 4. Advanced Diagnostics & Visual Reporting (`.heatmap()` & `.show()`)
+* **`.heatmap()`:** Dynamically adapts to the data footprint, plotting a matrix pivot heatmap for smaller runs or switching to an automated violin distribution layout across anion families for large-scale datasets.
+* **`.show()`:** Extracts a random sample of the remaining low-melting candidates and renders a 2D high-resolution molecular grid (Cation alongside Anion) inside the notebook layout.
 
----
 ## 🎛️ Interactive Dashboard Features
 
-The screening pipeline comes with an intuitive `ipywidgets`-based graphical interface that allows you to easily configure your structural modifications and screening constraints in real-time.
+The screening pipeline comes with an intuitive ipywidgets-based graphical interface that allows you to easily configure your structural modifications and screening constraints in real-time.
 
 ### 1. Screening Bounds Settings (Advanced Performance)
-At the top of the interface, you will find two direct numeric entry boxes to protect your workstation or server memory against combinatorics explosions:
-* **`Max Subts`**: Controls the maximum number of unique substituents loaded from your library for each active chemical site family.
-* **`Max Comb`**: Sets a hard absolute ceiling for the total number of generated cation structures. If the combinatorics estimation exceeds this number, the generation safely truncates to prevent *Out of Memory* crashes (highly recommended when running on free cloud environments like Google Colab).
+At the top of the interface, two numeric entry boxes protect your workstation or server memory against combinatorics explosions:
+* **Max Subts:** Controls the maximum number of unique substituents loaded from your library for each active chemical site family.
+* **Max Comb:** Sets a hard absolute ceiling for the total number of generated cation structures. If the combinatorics estimation exceeds this number, the generation safely truncates to prevent Out of Memory crashes.
 
 ### 2. Scaffold Selection & Core Slicing
-* **Scaffold Slider**: Scroll through your available base cation scaffolds from the loaded database (index from `0` to `6`). The index mapping corresponds to the following chemical families:
-  * `0`: Pyrrolidinium
-  * `1`: Pyridinium
-  * `2`: Piperidinium
-  * `3`: Ammonium
-  * `4`: Phosphonium
-  * `5`: Sulfonium
-  * `6`: Imidazolium
-* **Cut Atoms Selector**: Select one or multiple atom indices to dynamically remove them from the structure, opening up new coordination sites for branching.
+* **Cation Core Dropdown:** Select your available base cation scaffolds from the loaded database: Pyrrolidinium, Pyridinium, Piperidinium, Ammonium, Phosphonium, Sulfonium, Imidazolium.
+* **Cut Atoms Selector:** Select one or multiple atom indices to dynamically remove them from the structure, opening up new coordination sites for branching.
 
-### 3. Symmetry Configuration & Launch
-* **Symmetry Dropdowns**: Once an anchor placeholder (`[*]`) is detected on the remaining core structure, dropdown menus automatically appear to configure architectural symmetries.
-* **Launch Button**: Triggers the 4-step pipeline sequentially: *Combinatorial Generation* $\rightarrow$ *SAScore & Anion Crossover* $\rightarrow$ *Deep Learning $T_m$ Forecasting* $\rightarrow$ *Visual Sampling*.
-
----
+### 3. Symmetries & Validation
+* **Detected Symmetries:** Once an anchor placeholder (`[*]`) is detected on the remaining core structure, dropdown menus automatically appear to configure architectural symmetries and local substitution groups dynamically.
+* **Validate & Launch Screening Button:** Automatically triggers the full sequence (`.set_scaffold()`, `.generation()`, `.sascore()`, `.tm()`) using your custom graphic selections.
 
 ## 🚀 Execution & Interactive UI
 
 Testing and running the pipeline is containerized inside the `tests/` directory to protect production code from volatile Jupyter execution paths.
 
-### 1. Launching the Interactive Test Notebook
-Navigate to the `tests/` directory and open `test_pipeline.ipynb`. Create a cell with the following block to append the local package and launch the graphical interface:
+### 1. Initializing the Notebook Environment
+To test the pipeline locally, open `tests/test_pipeline.ipynb` and execute the following setup block. It includes the `%autoreload` magic extension to seamlessly catch local `main.py` source modifications:
 
 ```python
 import os
 import sys
-import pandas as pd
+
+# Activate Jupyter auto-reload
+%load_ext autoreload
+%autoreload 2
 
 # Append parent directory to sys.path so Python detects the package locally
 sys.path.append(os.path.abspath('..'))
 
-from ils_screening_tm.main import start_screening_interface
+from ils_screening_tm.main import ILsScreening
 
-# Load the scaffold baseline database
-df = pd.read_csv('../ils_screening_tm/database/base_cations.csv')
+# Instantiate the pipeline
+ils = ILsScreening()
 
-# Render the interactive dashboard
-start_screening_interface(df)
+# Launch the interactive interface
+ils.generation()
 ```
 
-### 2. Live Statistics Dashboard Output
-Upon execution, a real-time tracking panel will render, enabling live slicing, atom cutting, and symmetry management. Clicking the "Launch Full Pipeline" button runs the 4 steps and outputs the following comprehensive analysis:
+### 2. Running a Standalone Python Script (Bypassing UI)
+You can entirely bypass the graphical dashboard for non-interactive automated scripts or massive workflows by pre-defining a target atom-mapped scaffold string:
 
-```text
-==================================================
- 📊 SCREENING PIPELINE FINAL SUMMARY
-==================================================
- Total stable ionic liquids retained : 295
---------------------------------------------------
- 🌡️ Predicted Melting Point (Tm):
-   Minimum Predicted Tm              : -7.47°C (265.68 K)
-   Maximum Predicted Tm              : 99.62°C (372.77 K)
-   Average Predicted Tm              : 44.69°C (317.84 K)
---------------------------------------------------
- 🧪 Synthetic Accessibility Score (SAScore):
-   Minimum SAScore (Easiest)         : 5.65
-   Maximum SAScore (Hardest)         : 5.98
-   Average SAScore                   : 5.82
-   (Scale: 1 = Very Easy, 10 = Extremely Difficult)
-==================================================
+```python
+from ils_screening_tm.main import ILsScreening
+
+# Fluent method chaining
+ils = ILsScreening()
+ils.set_scaffold("C1=[N+]([*:201])CCN1[*:202]") \
+   .generation(limit_nb=2) \
+   .sascore(threshold=5.5) \
+   .tm(threshold_c=80.0) \
+   .heatmap(mode='tm') \
+   .show(sample_size=4)
 ```
----
 
-# 📦 Installation & Local Usage
-
+## 📦 Installation & Local Usage
 
 ### Standard Installation (via PyPI)
-
 If you prefer to run the screening pipeline locally on your machine, the package is officially hosted on PyPI. You can install it and all its core dependencies with a single command:
 
-
 ```bash
-
 pip install ils-screening-tm
 ```
-### Local Installation
 
+### Local Installation
 To install the package in editable development mode (useful if you want to modify the source code), clone the repository and run from the root directory:
-```
-pip install -e . 
+
+```bash
+pip install -e .
 ```
