@@ -1,48 +1,59 @@
 import io
 import os
 import sys
+import pickle
 import logging
 import warnings
-from pathlib import Path
+from itertools import product
+from dataclasses import dataclass
+from typing import Optional, List, Tuple
 
+import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 from IPython.display import display, clear_output
 import ipywidgets as widgets
 from rdkit import Chem
-from rdkit.Chem import Draw
+from rdkit.Chem import AllChem, Draw, RDConfig
+from mordred import Calculator, descriptors
+from tensorflow.keras.models import load_model
 
-# Import the 4 sequential modules we created
-from ils_screening_tm.Generation.generation import run_generation
-from ils_screening_tm.SAScore.sascore import run_sascore_filtering
-from ils_screening_tm.Prediction_tm.prediction_tm import run_tm_prediction
-from ils_screening_tm.Display.display import run_visualization
+warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings('ignore', message=".*SettingWithCopyWarning.*")
 
-# Mute warnings for a cleaner interface
-warnings.filterwarnings('ignore')
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
-logger = logging.getLogger("il_screening.main")
+logger = logging.getLogger("il_screening")
 
-# --- CONFIGURATION & PATHS -------------------------------------------------
-BASE_DIR = Path(__file__).resolve().parent
+sys.path.append(os.path.join(RDConfig.RDContribDir, 'SA_Score'))
+try:
+    import sascorer
+except ImportError as exc:
+    raise ImportError(
+        "Unable to load 'sascorer'. Ensure RDKit is properly installed "
+        "with contributions (RDContrib)."
+    ) from exc
 
-FICHIER_CATIONS = os.path.join(BASE_DIR, 'database', 'base_cations.csv')
-FICHIER_LIGANDS = os.path.join(BASE_DIR, 'database', 'substituents_library.csv')
 
-# Global state to keep track of the interactive encoding
-selection_state = {"encoded_smiles": None}
+# --- GLOBALS & STATIC UTILITIES -------------------------------------------
+
+FORBIDDEN_CONNECTIONS = {
+    'N': ['F', 'Cl', 'Br', 'I', 'At', 'Ts', 'O', 'S', 'N'],
+    'P': ['F', 'Cl', 'Br', 'I', 'At', 'Ts', 'O', 'S'],
+    'S': ['F', 'Cl', 'Br', 'I', 'At', 'Ts', 'N'],
+    'O': ['F', 'Cl', 'Br', 'I', 'At', 'Ts', 'O', 'S', 'N', 'P'],
+}
+SMARTS_INTERDITS = ["N[CX3]=[O,S]"]
+N_MODEL_FOLDS = 5
 
 
-# --- UI INTERACTIVE UTILITIES ----------------------------------------------
-
-def pil_to_widget(pil_image) -> widgets.Image:
-    """Converts a PIL image into an IPython image widget."""
+def pil_to_widget(pil_image):
     byte_io = io.BytesIO()
     pil_image.save(byte_io, format='PNG')
     return widgets.Image(value=byte_io.getvalue(), format='png', width=350, height=350)
 
 
-def remove_atoms_interactive(mol, indices) -> Chem.Mol:
-    """Removes atom indices from a molecule, safely handling sanitization."""
+def remove_atoms_interactive(mol, indices):
     if not indices:
         return mol
     try:
@@ -52,84 +63,596 @@ def remove_atoms_interactive(mol, indices) -> Chem.Mol:
         new_mol = editable.GetMol()
         try:
             Chem.SanitizeMol(new_mol)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Sanitization failed after atom removal (kept unsanitized mol): %s", exc)
         return new_mol
     except Exception as exc:
-        logger.warning(f"Atom removal failed: {exc}")
+        logger.warning("Atom removal failed: %s", exc)
         return mol
 
 
 def get_labeled_image(mol):
-    """Generates a 2D depiction of the molecule with atom indices visible."""
     dopts = Draw.MolDrawOptions()
     dopts.addAtomIndices = True
     dopts.bondLineWidth = 2
     return Draw.MolToImage(mol, size=(400, 400), options=dopts)
 
 
-# --- INTERACTIVE INTERFACE LAUNCHER ----------------------------------------
+def calculer_sascore_pour_smiles(smiles) -> Optional[float]:
+    if pd.isna(smiles) or not isinstance(smiles, str):
+        return None
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        if mol:
+            return round(sascorer.calculateScore(mol), 2)
+    except Exception as exc:
+        logger.debug("SAScore computation failed for '%s': %s", smiles, exc)
+    return None
 
-def start_screening_interface(df_scaffolds: pd.DataFrame) -> None:
-    """Builds and renders the full modular ipywidgets dashboard."""
-    if df_scaffolds.empty:
-        print("Error: The base Cations/Scaffolds DataFrame is empty.")
+
+def calculer_descripteurs_df(smiles_series: pd.Series, calc: Calculator, col_descriptors) -> np.ndarray:
+    mols = [Chem.MolFromSmiles(s) if pd.notna(s) and isinstance(s, str) else None for s in smiles_series]
+    df_calc = calc.pandas(mols, quiet=True)
+    df_calc = df_calc.apply(pd.to_numeric, errors='coerce').fillna(0)
+    return df_calc[col_descriptors].values
+
+
+def load_prediction_models(models_dir: str) -> List:
+    models = []
+    for i in range(1, N_MODEL_FOLDS + 1):
+        path = os.path.join(models_dir, f'pscnn_fold_{i}.keras')
+        if os.path.exists(path):
+            try:
+                models.append(load_model(path, compile=False))
+            except Exception as exc:
+                logger.warning("Failed to load fold model %s: %s", path, exc)
+    if not models:
+        raise RuntimeError(f"No fold models could be loaded from '{models_dir}'.")
+    return models
+
+
+@dataclass
+class CombinationStats:
+    total_generes: int = 0
+    exclus_smarts: int = 0
+    exclus_erreur: int = 0
+    combinatoire_tronquee: bool = False
+
+
+class CombinationEncoded:
+    """Generates functionalized cations by substituting tagged anchor points
+    (X, L, Z) on a scaffold with fragments drawn from a substituent library.
+
+    Substituent compatibility (FORBIDDEN_CONNECTIONS) is now evaluated
+    per individual anchor site rather than per anchor *type*, since two
+    sites of the same type (e.g. two 'X' anchors) can sit on chemically
+    different host atoms.
+    """
+
+    def __init__(self):
+        self.stats = CombinationStats()
+
+    def __call__(self, base_smiles_encoded: str, substituants_df: pd.DataFrame, limit_nb: int, max_combinations: int):
+        base_mol = Chem.MolFromSmiles(base_smiles_encoded)
+        if not base_mol:
+            return []
+
+        groups_by_type = {"X": set(), "L": set(), "Z": set()}
+        type_map = {1: "Z", 2: "X", 3: "L"}
+
+        for atom in base_mol.GetAtoms():
+            map_num = atom.GetAtomMapNum()
+            if map_num > 100:
+                m_type_int = map_num // 100
+                grp_id = map_num % 100
+                if m_type_int in type_map:
+                    groups_by_type[type_map[m_type_int]].add(grp_id)
+
+        def check_final_smarts_filter(m) -> bool:
+            for smarts in SMARTS_INTERDITS:
+                pattern = Chem.MolFromSmarts(smarts)
+                if pattern and m.HasSubstructMatch(pattern):
+                    return False
+            return True
+
+        def get_site_host_atom(m, t_int: int, grp_id: int) -> str:
+            """Host atom symbol for one specific anchor site (type + group id),
+            rather than for the whole type. This lets each site apply its own
+            FORBIDDEN_CONNECTIONS filter."""
+            target_map_num = t_int * 100 + grp_id
+            for at in m.GetAtoms():
+                if at.GetAtomMapNum() == target_map_num:
+                    neighbors = at.GetNeighbors()
+                    if neighbors:
+                        return neighbors[0].GetSymbol()
+            return 'C'
+
+        def get_ligand_head_atom(pattern: str, typ: str) -> Optional[str]:
+            m_lig = Chem.MolFromSmiles(pattern) if typ == 'SMILES' else Chem.MolFromSmarts(pattern)
+            if not m_lig:
+                return None
+            for at in m_lig.GetAtoms():
+                if at.GetSymbol() == '*':
+                    neighbors = at.GetNeighbors()
+                    if neighbors:
+                        return neighbors[0].GetSymbol()
+            return m_lig.GetAtomWithIdx(0).GetSymbol()
+
+        def is_valid_pattern(row) -> bool:
+            try:
+                m_test = Chem.MolFromSmiles(row['Pattern']) if row['Type'] == 'SMILES' else Chem.MolFromSmarts(row['Pattern'])
+                return m_test is not None
+            except Exception as exc:
+                logger.debug("Invalid substituent pattern '%s': %s", row.get('Pattern'), exc)
+                return False
+
+        # Vectorized validity mask instead of a manual iterrows loop.
+        valid_mask = substituants_df.apply(is_valid_pattern, axis=1)
+        sub_df = substituants_df[valid_mask].copy()
+
+        type_to_int = {"Z": 1, "X": 2, "L": 3}
+        combs_config = {}
+
+        for m_type in ["X", "L", "Z"]:
+            unique_groups = sorted(groups_by_type[m_type])
+            if not unique_groups:
+                combs_config[m_type] = [()]
+                continue
+
+            if 'Ligand' in sub_df.columns:
+                candidates = sub_df[sub_df['Ligand'] == m_type][['Type', 'Pattern']].values.tolist()
+            else:
+                candidates = []
+
+            site_options: List[List[Tuple[str, str]]] = []
+            for grp_id in unique_groups:
+                host = get_site_host_atom(base_mol, type_to_int[m_type], grp_id)
+                forbidden = FORBIDDEN_CONNECTIONS.get(host, [])
+                subs_for_site = []
+                for item in candidates:
+                    head = get_ligand_head_atom(item[1], item[0])
+                    if head not in forbidden:
+                        subs_for_site.append(tuple(item))
+                        if len(subs_for_site) >= limit_nb:
+                            break
+                if not subs_for_site:
+                    logger.warning(
+                        "No compatible substituents found for %s site (host atom '%s'); "
+                        "this site cannot be functionalized.", m_type, host
+                    )
+                site_options.append(subs_for_site)
+
+            if all(site_options):
+                combs_config[m_type] = list(product(*site_options))
+            else:
+                combs_config[m_type] = []
+
+        estimated_total = len(combs_config["X"]) * len(combs_config["L"]) * len(combs_config["Z"])
+        if estimated_total == 0:
+            logger.warning("No valid combinations can be generated for this scaffold/substituent set.")
+        elif estimated_total > max_combinations:
+            logger.warning(
+                "Estimated %d combinations exceeds cap of %d; generation will stop early once the cap is reached.",
+                estimated_total, max_combinations,
+            )
+            self.stats.combinatoire_tronquee = True
+
+        working_mol = Chem.RWMol(base_mol)
+        for atom in working_mol.GetAtoms():
+            if atom.GetAtomMapNum() > 100:
+                atom.SetIsotope(10000 + atom.GetAtomMapNum())
+        base_tagged_mol = working_mol.GetMol()
+
+        results = []
+        for cX, cL, cZ in product(combs_config["X"], combs_config["L"], combs_config["Z"]):
+            self.stats.total_generes += 1
+            if self.stats.total_generes > max_combinations:
+                self.stats.combinatoire_tronquee = True
+                break
+
+            try:
+                mol = base_tagged_mol
+                legend_parts = []
+                tasks = [
+                    (2, sorted(groups_by_type["X"]), cX),
+                    (3, sorted(groups_by_type["L"]), cL),
+                    (1, sorted(groups_by_type["Z"]), cZ),
+                ]
+
+                for type_int, unique_groups, chosen_comb in tasks:
+                    if not unique_groups:
+                        continue
+                    for grp_id, (typ, pattern) in zip(unique_groups, chosen_comb):
+                        target_iso = 10000 + (type_int * 100) + grp_id
+                        sub_mol = Chem.MolFromSmiles(pattern) if typ == 'SMILES' else Chem.MolFromSmarts(pattern)
+                        if not sub_mol:
+                            continue
+
+                        target_idx = next((at.GetIdx() for at in mol.GetAtoms() if at.GetIsotope() == target_iso), None)
+                        if target_idx is None:
+                            continue
+
+                        rw = Chem.RWMol(mol)
+                        rw.GetAtomWithIdx(target_idx).SetIsotope(999)
+                        res = AllChem.ReplaceSubstructs(
+                            rw.GetMol(), Chem.MolFromSmarts("[999*]"), sub_mol,
+                            replacementConnectionPoint=0,
+                        )
+                        if res:
+                            mol = res[0]
+                            try:
+                                Chem.SanitizeMol(mol)
+                            except Exception as exc:
+                                logger.debug(
+                                    "Sanitization failed mid-substitution (grp %s, pattern '%s'): %s",
+                                    grp_id, pattern, exc,
+                                )
+                        legend_parts.append(pattern)
+
+                if check_final_smarts_filter(mol):
+                    smi = Chem.MolToSmiles(mol)
+                    clean_mol = Chem.MolFromSmiles(smi)
+                    if clean_mol:
+                        for at in clean_mol.GetAtoms():
+                            at.SetIsotope(0)
+                            at.SetAtomMapNum(0)
+                        canonical_smi = Chem.MolToSmiles(clean_mol)
+                        results.append((canonical_smi, " + ".join(legend_parts)))
+                    else:
+                        self.stats.exclus_erreur += 1
+                        logger.debug("Discarded structure: final SMILES failed to re-parse ('%s').", smi)
+                else:
+                    self.stats.exclus_smarts += 1
+            except Exception as exc:
+                self.stats.exclus_erreur += 1
+                logger.debug("Discarded structure due to exception during substitution: %s", exc)
+
+        return results
+
+
+# --- 1. THE MAIN SCREENING CLASS ------------------------------------------
+
+class ILsScreening:
+    def __init__(self):
+        """Initializes internal active database storage configurations."""
+        self.df: Optional[pd.DataFrame] = None
+        self.encoded_smiles: Optional[str] = None
+
+        self.fichier_cations = os.path.join('data', 'base_cations.csv')
+        self.fichier_substituants = os.path.join('data', 'substituents_library.csv')
+        self.fichier_anions = os.path.join('data', 'anions_library.csv')
+        self.ch_models = 'Models'
+
+    def set_scaffold(self, smiles: str) -> "ILsScreening":
+        """Sets the active molecular scaffold target structure string."""
+        self.encoded_smiles = smiles
+        print(f"🎯 Scaffold structure explicitly set to: {self.encoded_smiles}")
+        return self
+
+    def generation(self, limit_nb: int = 2, max_combinations: int = 20000) -> "ILsScreening":
+        """Step 1: Generates combinatorially branched unique cations.
+
+        Automatically resets previous screening state to allow safe reruns.
+        If no scaffold is predefined, triggers the visual interactive UI.
+
+        Note: when the interactive UI path is used (no scaffold set), this
+        method returns immediately and `self.df` stays `None` until the
+        user finishes the widget interaction and clicks "Validate & Launch
+        Screening". Chaining `.generation().sascore()` in a non-notebook
+        script without a scaffold set will therefore raise a ValueError in
+        `.sascore()` rather than silently doing nothing.
+        """
+        # --- RESET STRATEGIC ENTRY POINT ---
+        # Clears any existing dataframe memory from previous pipeline runs
+        self.df = None
+
+        if not self.encoded_smiles:
+            print("💡 No scaffold layout defined. Launching interactive Widget interface...")
+            try:
+                dc_cations = pd.read_csv(self.fichier_cations)
+                df_substituants = pd.read_csv(self.fichier_substituants)
+                demarrer_interface_strict(df_cations=dc_cations, df_substituants=df_substituants, instance_screening=self)
+            except FileNotFoundError as e:
+                raise FileNotFoundError(f"❌ Impossible to launch UI, required local files missing: {e}")
+            return self
+
+        if not os.path.exists(self.fichier_substituants):
+            raise FileNotFoundError(f"❌ Substituent library file missing at {self.fichier_substituants}")
+
+        df_sub = pd.read_csv(self.fichier_substituants)
+        engine = CombinationEncoded()
+        raw_structures = engine(self.encoded_smiles, df_sub, limit_nb, max_combinations)
+
+        df_brut = pd.DataFrame(raw_structures, columns=['SMILES', 'Legend'])
+        self.df = df_brut.drop_duplicates(subset=['SMILES'], keep='first').copy()
+
+        print(f"🧬 [Generation] Generated {len(self.df)} unique functionalized cations.")
+        return self
+
+    def sascore(self, threshold: float = 6.0) -> "ILsScreening":
+        """Step 2: Evaluates structural ease of synthesis using standard RDKit SAScores."""
+        if self.df is None or 'SMILES' not in self.df.columns:
+            raise ValueError("❌ No active cation registry located. Execute .generation() first.")
+
+        print("🧪 [SAScore] Calculating chemical accessibility vectors...")
+        self.df['SAScore'] = self.df['SMILES'].apply(calculer_sascore_pour_smiles)
+        self.df = self.df.sort_values(by='SAScore', ascending=True, na_position='last')
+
+        before_count = len(self.df)
+        self.df = self.df[self.df['SAScore'] <= threshold].copy()
+        print(f"✂️ [SAScore Filter] {len(self.df)} / {before_count} cations retained under threshold (<= {threshold}).")
+        return self
+
+    def pair_with_anions(self) -> "ILsScreening":
+        """Intermediate Core Step: Couples survived cations matrices against the raw anion dataset.
+        Enables fluent chaining and standalone pairing analysis.
+        """
+        if self.df is None or ('SMILES' not in self.df.columns and 'Cation_SMILES' not in self.df.columns):
+            raise ValueError("❌ Cation dataframe sequence empty or missing. Run .generation() first.")
+
+        # Si les molécules sont déjà associées aux anions, on ne fait rien pour éviter de dupliquer la matrice
+        if 'Cation_SMILES' in self.df.columns and 'Anion_SMILES' in self.df.columns:
+            return self
+
+        if not os.path.exists(self.fichier_anions):
+            raise FileNotFoundError(f"❌ Anions source library missing at {self.fichier_anions}")
+
+        df_anions = pd.read_csv(self.fichier_anions)
+
+        # On prépare le dataframe des cations existants (en gardant le SAScore s'il a été calculé)
+        cols_to_keep = ['SMILES']
+        if 'SAScore' in self.df.columns:
+            cols_to_keep.append('SAScore')
+
+        df_cat_prep = self.df[cols_to_keep].rename(columns={'SMILES': 'Cation_SMILES'})
+        df_an_prep = df_anions[['SMILES']].rename(columns={'SMILES': 'Anion_SMILES'})
+
+        # Produit cartésien (Cross Join) pour créer toutes les combinaisons possibles de sels
+        self.df = pd.merge(df_cat_prep, df_an_prep, how='cross')
+        print(f"🔗 [Anion Pairing] Matrix built: Generated {len(self.df)} full salt configurations.")
+
+        return self  # <-- TRÈS IMPORTANT : Permet le chaînage fluide
+
+    def tm(self, threshold_c: float = 100.0) -> "ILsScreening":
+        """Step 3: Extracts molecular descriptors and returns deep learning melting points predictions."""
+        if self.df is not None and 'Cation_SMILES' not in self.df.columns:
+            self.pair_with_anions()
+
+        if self.df is None or self.df.empty:
+            raise ValueError("❌ No structured matrix ready to receive prediction tensors.")
+
+        print("Tm Prediction running... Extracting Mordred vectors and calling fold layers...")
+        try:
+            with open(os.path.join(self.ch_models, 'for-external.pkl'), 'rb') as f:
+                _ = pickle.load(f)
+                col_descriptors = pickle.load(f)
+            with open(os.path.join(self.ch_models, 'scaler_mordred.pkl'), 'rb') as f:
+                mon_scaler = pickle.load(f)
+            models = load_prediction_models(self.ch_models)
+        except Exception as exc:
+            raise RuntimeError(f"❌ Critical error loading external neural network assets: {exc}")
+
+        calc = Calculator(descriptors, ignore_3D=True)
+        X_cat_raw = calculer_descripteurs_df(self.df['Cation_SMILES'], calc, col_descriptors)
+        X_an_raw = calculer_descripteurs_df(self.df['Anion_SMILES'], calc, col_descriptors)
+
+        X_phys_complet = np.concatenate([X_cat_raw, X_an_raw], axis=1)
+        X_phys_std = mon_scaler.transform(X_phys_complet)
+
+        # Use the actual descriptor count from the loaded pickle instead of a
+        # hardcoded literal, so the slicing stays correct if the descriptor
+        # set used to train the scaler/models ever changes.
+        n_desc = len(col_descriptors)
+        X_cat_final = X_phys_std[:, :n_desc]
+        X_an_final = X_phys_std[:, n_desc:]
+
+        predictions = [model.predict([X_cat_final, X_an_final], verbose=0).flatten() for model in models]
+        predictions_moyennes_K = np.mean(predictions, axis=0)
+
+        self.df['Predicted_Tm_C'] = predictions_moyennes_K - 273.15
+
+        before_count = len(self.df)
+        self.df = self.df[self.df['Predicted_Tm_C'] <= threshold_c].copy()
+        print(f"📉 [Tm Filter] {len(self.df)} / {before_count} liquid salts survived ceiling check (<= {threshold_c}°C).")
+        return self
+
+    def heatmap(self, mode: str = 'auto') -> "ILsScreening":
+        """Step 4: Generates a scalable diagnostic plot layout.
+
+        Parameters:
+        -----------
+        mode : str, default 'auto'
+            The data column to analyze. Options are:
+            - 'auto'   : Plots Tm if available, otherwise falls back to SAScore.
+            - 'tm'     : Forces the melting point matrix/distribution plot.
+            - 'sascore': Forces the cation synthetic accessibility histogram.
+        """
+        if self.df is None or self.df.empty:
+            raise ValueError("❌ Active database is empty. Run .generation() first.")
+
+        # Validation du paramètre mode
+        mode = mode.lower()
+        if mode not in ['auto', 'tm', 'sascore']:
+            raise ValueError("❌ Invalid mode. Choose between 'auto', 'tm', or 'sascore'.")
+
+        # Résolution du mode automatique
+        if mode == 'auto':
+            if 'Predicted_Tm_C' in self.df.columns:
+                target_mode = 'tm'
+            elif 'SAScore' in self.df.columns:
+                target_mode = 'sascore'
+            else:
+                raise ValueError("❌ Data footprint insufficient for 'auto' mode. Run .sascore() or .tm() first.")
+        else:
+            target_mode = mode
+
+        # --- MODE 1 : THERMAL PROP (MELTING POINT) ---
+        if target_mode == 'tm':
+            if 'Predicted_Tm_C' not in self.df.columns:
+                raise ValueError("❌ 'Predicted_Tm_C' column missing. You must run .tm() before plotting thermal data.")
+
+            n_rows = len(self.df)
+            if n_rows <= 50:
+                print(f"📊 [Visualization] Generating matrix pivot heatmap ({n_rows} pairs)...")
+                plot_df = self.df.copy()
+                plot_df['Cat_Label'] = plot_df['Cation_SMILES'].apply(lambda s: s[:10] + '...')
+                plot_df['An_Label'] = plot_df['Anion_SMILES'].apply(lambda s: s[:10] + '...')
+                matrix = plot_df.pivot_table(index='Cat_Label', columns='An_Label', values='Predicted_Tm_C')
+
+                plt.figure(figsize=(10, 8))
+                sns.heatmap(matrix, annot=True, fmt=".1f", cmap="coolwarm", cbar_kws={'label': 'Predicted Tm (°C)'})
+                plt.title("Ionic Liquid Library Screening - Melting Point Heatmap")
+                plt.tight_layout()
+                plt.show()
+            else:
+                print(f"📈 [Visualization] Dataset too large ({n_rows} pairs). Swapping to Distribution Violin Plot...")
+                plt.figure(figsize=(12, 6))
+                plot_df = self.df.copy()
+                plot_df['Anion_Short'] = plot_df['Anion_SMILES'].apply(lambda s: s[:15] + '...' if len(s) > 15 else s)
+
+                sns.violinplot(data=plot_df, x='Anion_Short', y='Predicted_Tm_C', palette="Set2", inner="box")
+                plt.axhline(y=100.0, color='red', linestyle='--', linewidth=2, label='IL Limit Ceiling (100 °C)')
+
+                plt.xticks(rotation=45, ha='right')
+                plt.title("Distribution profile of Melting Points Across Generated Anions Families", fontsize=14)
+                plt.ylabel("Predicted Tm (°C)", fontsize=12)
+                plt.xlabel("Anion SMILES Family Structures", fontsize=12)
+                plt.legend(loc="upper right")
+                plt.grid(axis='y', linestyle=':', alpha=0.6)
+                plt.tight_layout()
+                plt.show()
+
+        # --- MODE 2 : SYNTHETIC PROP (SASCORE) ---
+        elif target_mode == 'sascore':
+            if 'SAScore' not in self.df.columns:
+                raise ValueError("❌ 'SAScore' column missing. You must run .sascore() before plotting structural diagnostics.")
+
+            print("📊 [Visualization] Plotting Cations SAScore distribution histogram...")
+            plt.figure(figsize=(10, 5))
+
+            sns.histplot(data=self.df, x='SAScore', kde=True, color="teal", bins=15, alpha=0.6)
+            plt.axvline(x=6.0, color='crimson', linestyle=':', linewidth=2, label='High Synthetic Difficulty Limit (6.0)')
+
+            plt.title("Distribution of Synthetic Accessibility Scores (SAScore) for Generated Cations", fontsize=13)
+            plt.xlabel("SAScore (1 = Easy, 10 = Hard)", fontsize=11)
+            plt.ylabel("Count of Cations", fontsize=11)
+            plt.legend()
+            plt.grid(axis='both', linestyle=':', alpha=0.5)
+            plt.tight_layout()
+            plt.show()
+
+        return self
+
+    def show(self, sample_size: int = 4, random_state: Optional[int] = None) -> "ILsScreening":
+        """Displays high-quality RDKit molecular grids without the pandas DataFrame table.
+
+        Automatically adapts whether to display standalone cations or cation/anion pairs.
+
+        Parameters:
+        -----------
+        sample_size : int, default 4
+            Number of random rows to display.
+        random_state : Optional[int], default None
+            Seed for the sampling. Left as None by default so repeated calls
+            show different candidates (matches original behavior); pass an
+            int for reproducible output, e.g. during debugging.
+        """
+        if self.df is None or self.df.empty:
+            print("⚠️ Current active datastore sandbox is empty.")
+            return self
+
+        nb_echantillon = min(sample_size, len(self.df))
+        df_sample = self.df.sample(n=nb_echantillon, random_state=random_state)
+
+        mols, legends = [], []
+
+        # Cas 1 : Après appariement (Colonnes Cation_SMILES et Anion_SMILES présentes)
+        if 'Cation_SMILES' in self.df.columns and 'Anion_SMILES' in self.df.columns:
+            print(f"🎨 Displaying {nb_echantillon} random Screened Salt Pairs (Left: Cation | Right: Anion):")
+            for idx, row in df_sample.iterrows():
+                mol_cat = Chem.MolFromSmiles(row['Cation_SMILES'])
+                mol_an = Chem.MolFromSmiles(row['Anion_SMILES'])
+                if mol_cat and mol_an:
+                    mols.extend([mol_cat, mol_an])
+                    sas_info = f" | SAS: {row['SAScore']:.1f}" if 'SAScore' in row else ""
+                    tm_info = f" | Tm: {row['Predicted_Tm_C']:.1f}°C" if 'Predicted_Tm_C' in row else ""
+                    legends.extend([f"Cand {idx} - Cation{sas_info}{tm_info}", f"Cand {idx} - Anion"])
+
+            if mols:
+                # 2 molécules par ligne = 1 paire complète (Cation + Anion) par ligne de la grille
+                grid = Draw.MolsToGridImage(mols, molsPerRow=2, subImgSize=(300, 300), legends=legends)
+                display(grid)
+
+        # Cas 2 : Avant appariement (Seule la colonne SMILES des cations générés est présente)
+        elif 'SMILES' in self.df.columns:
+            print(f"🎨 Displaying {nb_echantillon} random generated Cations structures:")
+            for idx, row in df_sample.iterrows():
+                mol_cat = Chem.MolFromSmiles(row['SMILES'])
+                if mol_cat:
+                    mols.append(mol_cat)
+                    sas_info = f" | SAS: {row['SAScore']:.1f}" if 'SAScore' in row else ""
+                    legends.append(f"Cation {idx}{sas_info}")
+
+            if mols:
+                # Pour les cations seuls, on peut les afficher sur 3 colonnes pour économiser de l'espace
+                grid = Draw.MolsToGridImage(mols, molsPerRow=3, subImgSize=(250, 250), legends=legends)
+                display(grid)
+
+        return self
+
+
+def demarrer_interface_strict(df_cations: pd.DataFrame, df_substituants: pd.DataFrame, instance_screening: Optional[ILsScreening] = None):
+    """Fallback interactive UI environment anchor using widgets."""
+    if df_cations.empty:
+        print("Error: The Cations DataFrame is empty.")
         return
 
-    # 1. Dynamic bounds configuration panel
-    limit_nb_widget = widgets.IntText(
-        value=2,
-        description='Max Subts:', 
-        tooltip='Max number of unique substituents loaded per site family'
-    )
-    max_comb_widget = widgets.IntText(
-        value=20000, 
-        description='Max Comb:', 
-        tooltip='Absolute ceiling for generated cations to protect server memory'
-    )
-    
-    config_panel = widgets.HBox(
-        [limit_nb_widget, max_comb_widget], 
-        layout=widgets.Layout(margin='0px 0px 15px 0px', padding='10px', border='1px dashed #ccc')
-    )
+    # Configuration des options du menu déroulant (Nom à afficher: Index réel du DataFrame)
+    familles_options = [
+        ('Pyrrolidinium', 0),
+        ('Pyridinium', 1),
+        ('Piperidinium', 2),
+        ('Ammonium', 3),
+        ('Phosphonium', 4),
+        ('Sulfonium', 5),
+        ('Imidazolium', 6)
+    ]
 
-    mol_slider = widgets.IntSlider(value=0, min=0, max=len(df_scaffolds) - 1, description='Scaffold:')
+    limit_nb_widget = widgets.IntText(value=2, description='Max Subts:')
+    max_comb_widget = widgets.IntText(value=20000, description='Max Comb:')
+    config_panel = widgets.HBox([limit_nb_widget, max_comb_widget], layout=widgets.Layout(margin='0px 0px 15px 0px', padding='10px', border='1px dashed #ccc'))
+
+    mol_dropdown = widgets.Dropdown(options=familles_options, value=0, description='Cation Core:')
     main_container = widgets.Output()
 
-    def refresh_dashboard(change=None):
+    def interface_dynamique(change=None):
         main_container.clear_output(wait=True)
-        idx = mol_slider.value
-        
+        idx = mol_dropdown.value
         try:
-            smiles = df_scaffolds['SMILES'].iloc[idx]
+            smiles = df_cations['SMILES'].iloc[idx]
         except Exception as exc:
-            logger.error(f"Could not read scaffold at index {idx}: {exc}")
+            logger.warning("Could not retrieve scaffold SMILES for dropdown index %s: %s", idx, exc)
             return
 
         mol = Chem.MolFromSmiles(smiles, sanitize=False)
         if not mol:
-            logger.error(f"Could not parse SMILES at index {idx}")
             return
 
         atom_indices = [atom.GetIdx() for atom in mol.GetAtoms()]
-        cut_selector = widgets.SelectMultiple(
-            options=atom_indices, value=(), description='Cut Atoms:', rows=10
-        )
+        new_selector = widgets.SelectMultiple(options=atom_indices, value=(), description='Cut Atoms:', rows=10)
         result_container = widgets.VBox([])
 
-        def on_cut_change(change_event):
+        def on_selection_change(change_event):
             selected_atoms = change_event['new']
             new_mol = remove_atoms_interactive(mol, selected_atoms)
-
-            # Detect remaining anchor placeholders
             anchors_found = {1: [], 2: [], 3: []}
             for atom in new_mol.GetAtoms():
                 raw_type = atom.GetIsotope() or atom.GetAtomMapNum()
                 if raw_type in anchors_found:
                     anchors_found[raw_type].append(atom.GetIdx())
 
-            widgets_group = [widgets.HTML("<b>3. Configure Site Symmetries</b>")]
-            current_dropdowns = {}
+            widgets_groupes = [widgets.HTML("<b>3. Detected Symmetries</b>")]
+            current_dd_widgets = {}
             has_anchors = False
             type_names = {1: "Z (Z Site)", 2: "X (X Site)", 3: "L (L Site)"}
 
@@ -138,116 +661,47 @@ def start_screening_interface(df_scaffolds: pd.DataFrame) -> None:
                 if not indices:
                     continue
                 has_anchors = True
-                widgets_group.append(widgets.Label(f"--- {type_names[type_code]} : {len(indices)} sites ---"))
-                
-                options_list = list(range(1, max(4, len(indices) + 1)))
+                widgets_groupes.append(widgets.Label(f"--- {type_names[type_code]} : {len(indices)} sites ---"))
+                opts = list(range(1, max(4, min(len(indices), 10) + 1)))
 
                 for i, at_idx in enumerate(indices):
-                    default_val = (i % len(options_list)) + 1
-                    dd = widgets.Dropdown(
-                        options=options_list, value=default_val, description=f"Atom {at_idx}:",
-                        layout=widgets.Layout(width='180px'), style={'description_width': '80px'}
-                    )
-                    current_dropdowns[at_idx] = {'widget': dd, 'type': type_code}
-                    widgets_group.append(dd)
+                    dd = widgets.Dropdown(options=opts, value=(i % len(opts)) + 1, description=f"Atom {at_idx}:", layout=widgets.Layout(width='180px'))
+                    current_dd_widgets[at_idx] = {'widget': dd, 'type': type_code}
+                    widgets_groupes.append(dd)
 
-            btn_launch = widgets.Button(description="Launch Full Pipeline", button_style='success')
+            btn = widgets.Button(description="Validate & Launch Screening", button_style='success')
 
-            def on_click_launch(b):
-                btn_launch.disabled = True
-                btn_launch.description = "Processing Pipeline..."
-                btn_launch.button_style = 'warning'
-
-                # Capture core settings selected dynamically in the panel widgets
-                current_limit_nb = limit_nb_widget.value
-                current_max_comb = max_comb_widget.value
-
+            def click_save(b):
+                btn.disabled = True
                 with main_container:
                     clear_output(wait=True)
-                    display(widgets.HTML(
-                        f"<h3 style='color: #d97706;'>🚀 Full Screening Pipeline in Progress... "
-                        f"(Max Subts: {current_limit_nb}, Max Comb: {current_max_comb}) "
-                        "Calculating descriptors and predictions. Please wait.</h3>"
-                    ))
-
-                    # Encode atom map mappings back into the molecule structures
+                    display(widgets.HTML("<h3 style='color: #0284c7;'>🧬 Cation generation in progress from UI selection...</h3>"))
                     working_mol = Chem.RWMol(new_mol)
                     for at in working_mol.GetAtoms():
                         at.SetIsotope(0)
                         at.SetAtomMapNum(0)
-
-                    for at_idx, data in current_dropdowns.items():
+                    for at_idx, data in current_dd_widgets.items():
                         atom = working_mol.GetAtomWithIdx(at_idx)
-                        encoded_map = data['type'] * 100 + int(data['widget'].value)
-                        atom.SetAtomMapNum(encoded_map)
+                        atom.SetAtomMapNum(data['type'] * 100 + int(data['widget'].value))
 
-                    final_smiles_encoded = Chem.MolToSmiles(working_mol)
-                    selection_state["encoded_smiles"] = final_smiles_encoded
+                    final_smi = Chem.MolToSmiles(working_mol)
 
-                    # --- PIPELINE ORCHESTRATION EXECUTION ---
-                    try:
-                        # Step 1: Combinatorial Generation using captured dynamic parameters
-                        run_generation(
-                            final_smiles_encoded, 
-                            limit_nb=current_limit_nb, 
-                            max_combinations=current_max_comb
-                        )
-                        
-                        # Step 2: SAScore filtering & Anion pairing
-                        run_sascore_filtering()
-                        
-                        # Step 3: Deep Learning Prediction & Tm Filter
-                        run_tm_prediction()
-                        
-                        # Step 4: Display Results & Plot samples
-                        clear_output(wait=True)
-                        run_visualization(sample_size=4)
-                        
-                    except Exception as pipeline_error:
-                        clear_output(wait=True)
-                        print(f"❌ Pipeline Execution Failed: {pipeline_error}")
-                        btn_launch.disabled = False
-                        btn_launch.description = "Launch Full Pipeline"
-                        btn_launch.button_style = 'success'
+                    scr = instance_screening if instance_screening is not None else ILsScreening()
+                    scr.set_scaffold(final_smi).generation(limit_nb_widget.value, max_comb_widget.value)
 
-            btn_launch.on_click(on_click_launch)
+            btn.on_click(click_save)
+            widgets_groupes.append(btn) if has_anchors else widgets_groupes.append(widgets.Label("No anchors detected."))
+            result_container.children = (widgets.Label("Result"), pil_to_widget(get_labeled_image(new_mol)), widgets.VBox(widgets_groupes))
 
-            if has_anchors:
-                widgets_group.append(btn_launch)
-            else:
-                widgets_group.append(widgets.Label("No active map placeholders found."))
-
-            img_res = pil_to_widget(get_labeled_image(new_mol))
-            result_container.children = (
-                widgets.Label("Resulting Structure"), img_res, widgets.VBox(widgets_group),
-            )
-
-        cut_selector.observe(on_cut_change, names='value')
-        img_base = pil_to_widget(get_labeled_image(mol))
-
+        new_selector.observe(on_selection_change, names='value')
         with main_container:
-            display(widgets.HBox([
-                widgets.VBox([widgets.Label("1. Choose Scaffold Base"), img_base]),
-                widgets.VBox([widgets.Label("2. Select Atoms to Remove"), cut_selector]),
-                result_container,
-            ]))
-            on_cut_change({'new': ()})
+            display(widgets.HBox([widgets.VBox([widgets.Label("1. Base Scaffold"), pil_to_widget(get_labeled_image(mol))]), widgets.VBox([widgets.Label("2. Cut Atoms"), new_selector]), result_container]))
+            on_selection_change({'new': ()})
 
-    mol_slider.observe(refresh_dashboard, names='value')
-    
-    # Display config header panel along with controls
-    display(widgets.Label("🔧 Screening Bounds Settings:"))
-    display(config_panel)
-    display(mol_slider)
-    display(main_container)
-    refresh_dashboard()
+    mol_dropdown.observe(interface_dynamique, names='value')
+    display(widgets.Label("🔧 Screening Bounds Settings:"), config_panel, mol_dropdown, main_container)
+    interface_dynamique()
 
-
-# --- APP TRIGGER -----------------------------------------------------------
 
 if __name__ == "__main__":
-    if not os.path.exists(FICHIER_CATIONS):
-        print(f"CRITICAL ERROR: Scaffold base file not found at {FICHIER_CATIONS}")
-    else:
-        df_scaffolds = pd.read_csv(FICHIER_CATIONS)
-        start_screening_interface(df_scaffolds)
+    os.makedirs("data", exist_ok=True)

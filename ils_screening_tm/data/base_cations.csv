@@ -1,0 +1,8 @@
+Nom,Type,SMILES
+Pyrrolidinium ,Cation , [2*][N+]1(C([2*])([2*])C([2*])([2*])C([2*])([2*])C1([2*])([2*]))[2*]
+Pyridinium ,Cation , [2*][N+]1=C([2*])C([2*])=C([2*])C([2*])=C1([2*])
+Piperidinium ,Cation , [2*][N+]1(C([2*])([2*])C([2*])([2*])C([2*])([2*])C([2*])([2*])C1([2*])([2*]))[2*]
+Ammonium ,Cation , [N+]([2*])([2*])([2*])([2*])
+Phosphonium ,Cation ,[2*][P+]([2*])([2*])[2*]
+Sulfonium ,Cation , [2*][S+]([2*])[2*]
+Imidazolium  ,Cation ,C1(N(C(=[N+](C1[2*])[2*])[2*])[2*])[2*]
