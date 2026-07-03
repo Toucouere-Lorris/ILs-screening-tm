@@ -689,6 +689,22 @@ class ILsScreening:
 
         return self
 
+    def load(self, filename: str) -> "ILsScreening":
+        """
+        Loads a CSV or Excel file back into the internal dataframe.
+        """
+        import pandas as pd
+        if filename.endswith('.csv'):
+            self.df = pd.read_csv(filename)
+        elif filename.endswith('.xlsx'):
+            self.df = pd.read_excel(filename)
+        else:
+            print("❌ Unsupported format. Please use .csv or .xlsx")
+            return self
+
+        print(f"✅ Data loaded successfully from '{filename}' ({len(self.df)} rows).")
+        return self
+
 
 def demarrer_interface_strict(df_cations: pd.DataFrame, df_substituants: pd.DataFrame, instance_screening: Optional[ILsScreening] = None):
     """Fallback interactive UI environment anchor using widgets."""
