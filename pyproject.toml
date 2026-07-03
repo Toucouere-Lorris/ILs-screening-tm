@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ils_screening_tm"
-version = "0.1.2"
+version = "0.1.3"
 authors = [
   { name="Lorris Toucouère", email="lorris.toucouere@insa-toulouse.fr" },
 ]
@@ -30,3 +30,7 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["ils_screening_tm*"]
+
+[tool.setuptools.package_data]
+"ils_screening_tm" = ["data/*.csv"]
+"ils_screening_tm.Models" = ["*.pkl", "*.keras"]

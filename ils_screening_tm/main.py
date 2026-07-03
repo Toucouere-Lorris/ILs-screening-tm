@@ -312,21 +312,26 @@ class CombinationEncoded:
 
 
 # --- 1. THE MAIN SCREENING CLASS ------------------------------------------
+import importlib.resources as pkg_resources
+from ils_screening_tm import data as data_module
 
 class ILsScreening:
     def __init__(self):
-        """Initializes internal active database storage configurations."""
         self.df: Optional[pd.DataFrame] = None
         self.encoded_smiles: Optional[str] = None
 
-        base_dir = os.path.dirname(os.path.abspath(__file__))
+        # Utilisation de importlib.resources pour localiser les fichiers
+        # 'data_module' est le module correspondant à ton dossier 'data/'
+        with pkg_resources.path(data_module, 'base_cations.csv') as p:
+            self.fichier_cations = str(p)
+        with pkg_resources.path(data_module, 'substituents_library.csv') as p:
+            self.fichier_substituants = str(p)
+        with pkg_resources.path(data_module, 'anions_library.csv') as p:
+            self.fichier_anions = str(p)
 
-        # Configuration des chemins absolus stables pour éviter les FileNotFoundError
-        self.fichier_cations = os.path.join(base_dir, 'data', 'base_cations.csv')
-        self.fichier_substituants = os.path.join(base_dir, 'data', 'substituents_library.csv')
-        self.fichier_anions = os.path.join(base_dir, 'data', 'anions_library.csv')
-        self.ch_models = os.path.join(base_dir, 'Models')
-
+        # Pour les modèles, si le dossier est aussi dans le package :
+        with pkg_resources.path(data_module, '..') as p: # Remonte au dossier parent si Models est à côté
+            self.ch_models = os.path.join(str(p), 'Models')
     def __repr__(self) -> str:
         """Custom clean string representation for Jupyter notebooks display."""
         if self.df is None:
