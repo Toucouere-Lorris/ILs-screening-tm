@@ -44,27 +44,29 @@ Git/
 └── README.md
 ```
 
-## ⚙️ The Fluent Screening Pipeline Workflow
+## ⚙ The Screening Pipeline Workflow
 
 The package orchestrates a sequential pipeline using an object-oriented API with method chaining (`.generation().sascore().tm()`). All calculations modify an internal `self.df` state registry in memory, bypassing unnecessary disk read/write overhead:
 
 ### 1. Scaffold Selection & UI Interaction (`.generation()`)
-* **Interactive Trigger:** If no scaffold is pre-set, calling this method automatically launches the interactive visual ipywidgets environment to choose a base cation, cut specific atom indices, and configure local anchor symmetries/groups dynamically.
-* **Library Expansion:** Generates a library of combinatorially substituted cations using functional group fragments and connection rules.
+* **Interactive Trigger:** Launches the interactive `ipywidgets` environment to choose a base cation, configure anchor sites, and define substituent groups.
+* **Library Expansion:** Generates functionalized cations based on combinatorial substitution rules, validated against internal structural constraints.
 
 ### 2. Synthetic Accessibility Filtering & Anion Pairing (`.sascore()`)
-* Computes SAScores (via RDKit contributions) for every single unique cation.
-* Enforces a strict synthesis gate (default `threshold=6.0`) to discard overly complex or unstable chemical entities.
-* Automatically triggers a cross-join (product cartesian) with the package's internal anion library to build the complete salt matrix.
+* Computes SAScores (via RDKit contributions) and enforces a strict synthesis gate (default `threshold=6.0`) to discard overly complex entities.
+* Automatically triggers a cross-join with the package's internal anion library to build the complete salt matrix.
 
 ### 3. Deep Learning $T_m$ Prediction (`.tm()`)
-* Computes 209 mathematical Mordred structural descriptors for both the cation and anion blocks.
-* Standardizes feature blocks using pre-trained scalers and feeds data into a 5-Fold Cross-Validation Ensemble of Parallel-Scaffold Convolutional Neural Networks (PSCNN).
-* Computes the ensemble average melting point and applies a room-temperature/low-melting screening threshold (default $T_m \le 100^\circ\text{C}$).
+* Computes Mordred structural descriptors and feeds data into a 5-Fold Cross-Validation Ensemble of Parallel-Scaffold Convolutional Neural Networks (PSCNN).
+* Applies a room-temperature/low-melting screening threshold (default $T_m \le 100^\circ\text{C}$).
 
-### 4. Advanced Diagnostics & Visual Reporting (`.heatmap()` & `.show()`)
-* **`.heatmap()`:** Dynamically adapts to the data footprint, plotting a matrix pivot heatmap for smaller runs or switching to an automated violin distribution layout across anion families for large-scale datasets.
-* **`.show()`:** Extracts a random sample of the remaining low-melting candidates and renders a 2D high-resolution molecular grid (Cation alongside Anion) inside the notebook layout.
+### 4. Advanced Diagnostics & Visual Reporting (`.plot()`)
+* **Multi-Modal Analytics:** Supports diverse representations including `hist` for property distributions, `similarity` for structural clustering, and `matrix` for comparative property grid screening.
+* **Automated Rendering:** Dynamically handles data scaling, labeling, and layout finalization for publication-quality visual output.
+
+### 5. Data Serialization & Persistence (`.save()` & `.load()`)
+* **Persistence (`.save()`):** Serializes the internal DataFrame (`self.df`) into `.csv` or `.xlsx` formats, allowing for precise output control via column filtering.
+* **Rehydration (`.load()`):** Restores previously saved libraries, ensuring seamless workflow resumption and maintaining consistency across independent sessions.
 
 ## 🎛️ Interactive Dashboard Features
 
