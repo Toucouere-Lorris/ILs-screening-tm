@@ -312,26 +312,27 @@ class CombinationEncoded:
 
 
 # --- 1. THE MAIN SCREENING CLASS ------------------------------------------
-import importlib.resources as pkg_resources
-from ils_screening_tm import data as data_module
+import os
+import ils_screening_tm.data as data_module
+import ils_screening_tm.Models as models_module
 
 class ILsScreening:
     def __init__(self):
         self.df: Optional[pd.DataFrame] = None
         self.encoded_smiles: Optional[str] = None
 
-        # Utilisation de importlib.resources pour localiser les fichiers
-        # 'data_module' est le module correspondant à ton dossier 'data/'
-        with pkg_resources.path(data_module, 'base_cations.csv') as p:
-            self.fichier_cations = str(p)
-        with pkg_resources.path(data_module, 'substituents_library.csv') as p:
-            self.fichier_substituants = str(p)
-        with pkg_resources.path(data_module, 'anions_library.csv') as p:
-            self.fichier_anions = str(p)
+        # 1. Localiser le dossier 'data' physiquement sur le disque
+        data_dir = os.path.dirname(os.path.abspath(data_module.__file__))
 
-        # Pour les modèles, si le dossier est aussi dans le package :
-        with pkg_resources.path(data_module, '..') as p: # Remonte au dossier parent si Models est à côté
-            self.ch_models = os.path.join(str(p), 'Models')
+        # 2. Définir les chemins des fichiers CSV
+        self.fichier_cations = os.path.join(data_dir, 'base_cations.csv')
+        self.fichier_substituants = os.path.join(data_dir, 'substituents_library.csv')
+        self.fichier_anions = os.path.join(data_dir, 'anions_library.csv')
+
+        # 3. Localiser le dossier 'Models' physiquement sur le disque
+        # On utilise le module Models directement
+        self.ch_models = os.path.dirname(os.path.abspath(models_module.__file__))
+
     def __repr__(self) -> str:
         """Custom clean string representation for Jupyter notebooks display."""
         if self.df is None:
