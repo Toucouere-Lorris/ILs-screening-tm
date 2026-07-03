@@ -536,6 +536,7 @@ class ILsScreening:
             finalize_plot(save_path)
 
         # --- KIND: MATRIX (Value Grid Heatmap) ---
+        # --- KIND: MATRIX (Value Grid Heatmap) ---
         elif kind == 'matrix':
             if 'Anion_SMILES' in self.df.columns:
                 # 1. Map Cations to Index
@@ -559,14 +560,31 @@ class ILsScreening:
                     ]
                 
                 # 4. Pivot table using indices
+                values_col = 'SAScore' if prop == 'sascore' else 'Predicted_Tm_C'
                 matrix = plot_df.pivot_table(
                     index='Cation_Index', 
                     columns='Anion_Index', 
-                    values='SAScore' if prop == 'sascore' else 'Predicted_Tm_C'
+                    values=values_col
                 )
                 
+                # Define heatmap parameters
+                is_tm = (prop == 'tm')
                 plt.figure(figsize=(10, 8))
-                sns.heatmap(matrix, cmap="YlOrRd" if prop == 'sascore' else "coolwarm", annot=False)
+                sns.heatmap(
+                    matrix, 
+                    cmap="coolwarm" if is_tm else "YlOrRd", 
+                    center=100 if is_tm else None, # Center white at 100°C for Tm
+                    vmin=matrix.values.min(),
+                    vmax=matrix.values.max(),
+                    annot=False,
+                    cbar=True,
+                    cbar_kws={
+                        'label': 'Predicted Melting Point (°C)' if is_tm else 'SAScore',
+                        'shrink': 0.8,
+                        'aspect': 20
+                    }
+                )
+                
                 plt.title(f"Property Matrix: {prop.upper()} (Indices)")
                 plt.xlabel("Anion Index")
                 plt.ylabel("Cation Index")
