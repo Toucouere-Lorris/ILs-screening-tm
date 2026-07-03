@@ -550,10 +550,13 @@ class ILsScreening:
                 plot_df['Cation_Index'] = plot_df[smiles_col].map(cat_to_idx)
                 plot_df['Anion_Index'] = plot_df['Anion_SMILES'].map(an_to_idx)
                 
-                # 3. Filter cations
-                if len(unique_cats) > max_display:
-                    print(f"📈 [Plot] Displaying first {max_display} cations.")
-                    plot_df = plot_df[plot_df['Cation_Index'] < max_display]
+                # 3. Filter data to display only the requested number of Cations AND Anions
+                if len(unique_cats) > max_display or len(unique_ans) > max_display:
+                    print(f"📈 [Plot] Sub-sampling to first {max_display} cations and anions.")
+                    plot_df = plot_df[
+                        (plot_df['Cation_Index'] < max_display) & 
+                        (plot_df['Anion_Index'] < max_display)
+                    ]
                 
                 # 4. Pivot table using indices
                 matrix = plot_df.pivot_table(
@@ -564,7 +567,7 @@ class ILsScreening:
                 
                 plt.figure(figsize=(10, 8))
                 sns.heatmap(matrix, cmap="YlOrRd" if prop == 'sascore' else "coolwarm", annot=False)
-                plt.title(f"Property Matrix: {prop.upper()} (Cation/Anion Indices)")
+                plt.title(f"Property Matrix: {prop.upper()} (Indices)")
                 plt.xlabel("Anion Index")
                 plt.ylabel("Cation Index")
                 finalize_plot(save_path)
