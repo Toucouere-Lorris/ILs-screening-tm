@@ -482,19 +482,23 @@ class ILsScreening:
         print(f"📉 [Tm Filter] {len(self.df)} / {before_count} liquid salts survived ceiling check (<= {threshold_c}°C).")
         return self
 
-    def plot(self, prop: str = 'auto', kind: str = 'dist', max_display: int = 50) -> "ILsScreening":
+    def plot(self, prop: str = 'auto', kind: str = 'hist', max_display: int = 50, save_path: str = None) -> "ILsScreening":
         """
-        Generates advanced diagnostic plots for the ongoing screening workflow.
+        Generates diagnostic plots for the screening workflow.
 
         Parameters:
         -----------
         prop : str, default 'auto'
-            The chemical or structural property to analyze ('sascore' or 'tm').
-        kind : str, default 'dist'
-            The layout structure of the graphic ('dist' or 'matrix').
+            The chemical or physical property to analyze ('sascore' or 'tm').
+        kind : str, default 'hist'
+            The visualization style:
+            - 'hist'      : Statistical distribution of the property.
+            - 'matrix'    : Heatmap grid of the property values (requires ILs).
+            - 'similarity': Tanimoto structural similarity matrix.
         max_display : int, default 50
-            The maximum number of rows/molecules to display in matrix modes 
-            to ensure readability. High-density datasets will be automatically sub-sampled.
+            Maximum number of molecules to display in matrix or similarity plots.
+        save_path : str, default None
+            If provided, saves the figure to the specified path (e.g., 'plot.png').
         """
         import matplotlib.pyplot as plt
         import seaborn as sns
@@ -504,111 +508,65 @@ class ILsScreening:
         from rdkit import DataStructs
 
         if self.df is None or self.df.empty:
-            raise ValueError("❌ Active database is empty. Run .generation() first.")
+            raise ValueError("❌ Database is empty.")
 
         prop = prop.lower()
         kind = kind.lower()
-        
-        # Identification dynamique de la colonne SMILES
         smiles_col = 'SMILES' if 'SMILES' in self.df.columns else 'Cation_SMILES'
         
         if prop == 'auto':
             prop = 'tm' if 'Predicted_Tm_C' in self.df.columns else 'sascore'
 
-        if prop not in ['sascore', 'tm'] or kind not in ['dist', 'matrix']:
-            raise ValueError("❌ Invalid parameters. Use prop=['sascore','tm'] and kind=['dist','matrix'].")
+        # Helper to handle saving
+        def finalize_plot(path):
+            if path:
+                plt.savefig(path, dpi=300, bbox_inches='tight')
+                print(f"💾 [Plot] Figure saved to {path}")
+            plt.show()
 
-        # =========================================================================
-        # --- CASE A: SYNTHETIC ACCESSIBILITY DIAGNOSTICS (SASCORE) ---
-        # =========================================================================
-        if prop == 'sascore':
-            if 'SAScore' not in self.df.columns:
-                raise ValueError("❌ 'SAScore' column missing. Run .sascore() before plotting.")
-
-            unique_cats = self.df.sort_values(by='SAScore').drop_duplicates(subset=[smiles_col])
-            n_cats = len(unique_cats)
-
-            if kind == 'dist':
-                print(f"📊 [Plot] Generating Cations SAScore distribution histogram ({n_cats} unique cations)...")
-                plt.figure(figsize=(10, 5))
-                sns.histplot(data=unique_cats, x='SAScore', kde=True, color="teal", bins=15, alpha=0.6)
-                plt.axvline(x=6.0, color='crimson', linestyle=':', linewidth=2, label='High Synthetic Difficulty Limit (6.0)')
-                plt.title("Distribution of Synthetic Accessibility Scores (SAScore)", fontsize=13)
-                plt.xlabel("SAScore (1 = Easy, 10 = Hard)", fontsize=11)
-                plt.ylabel("Count of Cations", fontsize=11)
-                plt.legend()
-                plt.grid(axis='both', linestyle=':', alpha=0.5)
-                plt.tight_layout()
-                plt.show()
-
-            elif kind == 'matrix':
-                if n_cats > max_display:
-                    print(f"📈 [Plot] Library contains {n_cats} unique cations. Sub-sampling to {max_display} candidates.")
-                    unique_cats = unique_cats.head(max_display)
-                
-                print(f"🧬 [Plot] Generating Cation Cross-Similarity Matrix...")
-                mols = [Chem.MolFromSmiles(s) for s in unique_cats[smiles_col]]
-                fps = [AllChem.GetMorganFingerprintAsBitVect(m, 2, nBits=2048) for m in mols if m is not None]
-                
-                sim_matrix = np.zeros((len(fps), len(fps)))
-                for i in range(len(fps)):
-                    for j in range(len(fps)):
-                        sim_matrix[i, j] = DataStructs.TanimotoSimilarity(fps[i], fps[j])
-
-                labels = [f"{row[smiles_col][:8]}.. (SA:{row['SAScore']:.1f})" for _, row in unique_cats.iterrows()]
-
-                plt.figure(figsize=(11, 9))
-                sns.heatmap(sim_matrix, xticklabels=labels, yticklabels=labels, cmap="viridis", 
-                            annot=len(unique_cats) <= 15, fmt=".2f", cbar_kws={'label': 'Tanimoto Structural Similarity (0 to 1)'})
-                plt.title("Cation-Cation Cross-Similarity Heatmap (Ordered by SAScore)", fontsize=13)
-                plt.xticks(rotation=45, ha='right')
-                plt.tight_layout()
-                plt.show()
-
-        # =========================================================================
-        # --- CASE B: THERMAL INFRASTRUCTURE (MELTING POINT) ---
-        # =========================================================================
-        elif prop == 'tm':
-            if 'Predicted_Tm_C' not in self.df.columns:
-                raise ValueError("❌ 'Predicted_Tm_C' column missing. Run .tm() before plotting.")
+        # --- KIND: HISTOGRAM (Statistical Distribution) ---
+        if kind == 'hist':
+            col_to_plot = 'SAScore' if prop == 'sascore' else 'Predicted_Tm_C'
+            if col_to_plot not in self.df.columns:
+                raise ValueError(f"❌ {col_to_plot} missing. Run .{prop}() first.")
             
-            n_rows = len(self.df)
+            plt.figure(figsize=(10, 5))
+            sns.histplot(data=self.df, x=col_to_plot, kde=True, color="teal", bins=20)
+            plt.title(f"Distribution of {col_to_plot}")
+            finalize_plot(save_path)
 
-            if kind == 'dist':
-                print(f"📈 [Plot] Generating Thermal Distribution Violin Plot ({n_rows} paired entries)...")
-                plt.figure(figsize=(12, 6))
-                plot_df = self.df.copy()
-                plot_df['Anion_Short'] = plot_df['Anion_SMILES'].apply(lambda s: s[:15] + '...' if len(s) > 15 else s)
-
-                sns.violinplot(data=plot_df, x='Anion_Short', y='Predicted_Tm_C', palette="Set2", inner="box")
-                plt.axhline(y=100.0, color='red', linestyle='--', linewidth=2, label='IL Limit Ceiling (100 °C)')
-                plt.xticks(rotation=45, ha='right')
-                plt.title("Distribution Profile of Melting Points Across Generated Anions Families", fontsize=14)
-                plt.ylabel("Predicted Tm (°C)", fontsize=12)
-                plt.xlabel("Anion SMILES Family Structures", fontsize=12)
-                plt.legend(loc="upper right")
-                plt.grid(axis='y', linestyle=':', alpha=0.6)
-                plt.tight_layout()
-                plt.show()
-
-            elif kind == 'matrix':
-                plot_df = self.df.copy()
+        # --- KIND: MATRIX (Value Grid Heatmap) ---
+        elif kind == 'matrix':
+            if 'Anion_SMILES' in self.df.columns:
+                plot_df = self.df.sample(n=min(len(self.df), max_display))
+                matrix = plot_df.pivot_table(
+                    index=smiles_col, 
+                    columns='Anion_SMILES', 
+                    values='SAScore' if prop == 'sascore' else 'Predicted_Tm_C'
+                )
                 
-                if len(plot_df) > max_display:
-                    print(f"📈 [Plot] Matrix density high ({len(plot_df)} salts). Sampling {max_display} for visibility.")
-                    plot_df = plot_df.sample(n=max_display, random_state=42)
-
-                print(f"📊 [Plot] Generating Cation-Anion Matrix Grid Heatmap...")
-                # Utilise smiles_col pour les cations dans la matrice
-                plot_df['Cat_Label'] = plot_df[smiles_col].apply(lambda s: s[:10] + '...')
-                plot_df['An_Label'] = plot_df['Anion_SMILES'].apply(lambda s: s[:10] + '...')
-                matrix = plot_df.pivot_table(index='Cat_Label', columns='An_Label', values='Predicted_Tm_C')
-
                 plt.figure(figsize=(10, 8))
-                sns.heatmap(matrix, annot=len(plot_df) <= 40, fmt=".1f", cmap="coolwarm", cbar_kws={'label': 'Predicted Tm (°C)'})
-                plt.title("Ionic Liquid Library Screening - Melting Point Matrix Heatmap")
-                plt.tight_layout()
-                plt.show()
+                sns.heatmap(matrix, cmap="YlOrRd" if prop == 'sascore' else "coolwarm", annot=False)
+                plt.title(f"Property Matrix: {prop.upper()}")
+                finalize_plot(save_path)
+            else:
+                print("⚠️ No Anions found. Matrix kind requires Ionic Liquids (Cation + Anion).")
+
+        # --- KIND: SIMILARITY (Tanimoto Structural Similarity) ---
+        elif kind == 'similarity':
+            unique_cats = self.df.drop_duplicates(subset=[smiles_col]).head(max_display)
+            mols = [Chem.MolFromSmiles(s) for s in unique_cats[smiles_col]]
+            fps = [AllChem.GetMorganFingerprintAsBitVect(m, 2, nBits=2048) for m in mols if m is not None]
+            
+            sim_matrix = np.zeros((len(fps), len(fps)))
+            for i in range(len(fps)):
+                for j in range(len(fps)):
+                    sim_matrix[i, j] = DataStructs.TanimotoSimilarity(fps[i], fps[j])
+
+            plt.figure(figsize=(10, 8))
+            sns.heatmap(sim_matrix, cmap="viridis", annot=False)
+            plt.title("Structural Similarity Matrix (Tanimoto Coefficients)")
+            finalize_plot(save_path)
 
         return self
 
