@@ -538,16 +538,29 @@ class ILsScreening:
         # --- KIND: MATRIX (Value Grid Heatmap) ---
         elif kind == 'matrix':
             if 'Anion_SMILES' in self.df.columns:
-                plot_df = self.df.sample(n=min(len(self.df), max_display))
+                # Map unique cations to an index for cleaner visualization
+                unique_cations = self.df[smiles_col].unique()
+                cat_to_idx = {smile: i for i, smile in enumerate(unique_cations)}
+                
+                plot_df = self.df.copy()
+                plot_df['Cation_Index'] = plot_df[smiles_col].map(cat_to_idx)
+                
+                # Filter to display only the requested number of cations
+                if len(unique_cations) > max_display:
+                    print(f"📈 [Plot] Library contains {len(unique_cations)} unique cations. Displaying first {max_display}.")
+                    plot_df = plot_df[plot_df['Cation_Index'] < max_display]
+                
                 matrix = plot_df.pivot_table(
-                    index=smiles_col, 
+                    index='Cation_Index', 
                     columns='Anion_SMILES', 
                     values='SAScore' if prop == 'sascore' else 'Predicted_Tm_C'
                 )
                 
                 plt.figure(figsize=(10, 8))
                 sns.heatmap(matrix, cmap="YlOrRd" if prop == 'sascore' else "coolwarm", annot=False)
-                plt.title(f"Property Matrix: {prop.upper()}")
+                plt.title(f"Property Matrix: {prop.upper()} (Cation Indices)")
+                plt.xlabel("Anion SMILES")
+                plt.ylabel("Cation Index")
                 finalize_plot(save_path)
             else:
                 print("⚠️ No Anions found. Matrix kind requires Ionic Liquids (Cation + Anion).")
@@ -564,11 +577,10 @@ class ILsScreening:
                     sim_matrix[i, j] = DataStructs.TanimotoSimilarity(fps[i], fps[j])
 
             plt.figure(figsize=(10, 8))
-            sns.heatmap(sim_matrix, cmap="viridis", annot=False)
+            # Added extent and labels to match the index-style matrix plot
+            sns.heatmap(sim_matrix, cmap="viridis", annot=False, xticklabels=range(len(fps)), yticklabels=range(len(fps)))
             plt.title("Structural Similarity Matrix (Tanimoto Coefficients)")
             finalize_plot(save_path)
-
-        return self
 
     def show(self, sample_size: int = 4, random_state: Optional[int] = None) -> "ILsScreening":
         """Displays high-quality RDKit molecular grids without the pandas DataFrame table.
