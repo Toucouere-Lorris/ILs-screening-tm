@@ -538,28 +538,34 @@ class ILsScreening:
         # --- KIND: MATRIX (Value Grid Heatmap) ---
         elif kind == 'matrix':
             if 'Anion_SMILES' in self.df.columns:
-                # Map unique cations to an index for cleaner visualization
-                unique_cations = self.df[smiles_col].unique()
-                cat_to_idx = {smile: i for i, smile in enumerate(unique_cations)}
+                # 1. Map Cations to Index
+                unique_cats = self.df[smiles_col].unique()
+                cat_to_idx = {smile: i for i, smile in enumerate(unique_cats)}
+                
+                # 2. Map Anions to Index
+                unique_ans = self.df['Anion_SMILES'].unique()
+                an_to_idx = {smile: i for i, smile in enumerate(unique_ans)}
                 
                 plot_df = self.df.copy()
                 plot_df['Cation_Index'] = plot_df[smiles_col].map(cat_to_idx)
+                plot_df['Anion_Index'] = plot_df['Anion_SMILES'].map(an_to_idx)
                 
-                # Filter to display only the requested number of cations
-                if len(unique_cations) > max_display:
-                    print(f"📈 [Plot] Library contains {len(unique_cations)} unique cations. Displaying first {max_display}.")
+                # 3. Filter cations
+                if len(unique_cats) > max_display:
+                    print(f"📈 [Plot] Displaying first {max_display} cations.")
                     plot_df = plot_df[plot_df['Cation_Index'] < max_display]
                 
+                # 4. Pivot table using indices
                 matrix = plot_df.pivot_table(
                     index='Cation_Index', 
-                    columns='Anion_SMILES', 
+                    columns='Anion_Index', 
                     values='SAScore' if prop == 'sascore' else 'Predicted_Tm_C'
                 )
                 
                 plt.figure(figsize=(10, 8))
                 sns.heatmap(matrix, cmap="YlOrRd" if prop == 'sascore' else "coolwarm", annot=False)
-                plt.title(f"Property Matrix: {prop.upper()} (Cation Indices)")
-                plt.xlabel("Anion SMILES")
+                plt.title(f"Property Matrix: {prop.upper()} (Cation/Anion Indices)")
+                plt.xlabel("Anion Index")
                 plt.ylabel("Cation Index")
                 finalize_plot(save_path)
             else:
