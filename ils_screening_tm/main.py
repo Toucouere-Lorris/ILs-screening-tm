@@ -538,6 +538,7 @@ class ILsScreening:
         # --- KIND: MATRIX (Value Grid Heatmap) ---
         elif kind == 'matrix':
             if 'Anion_SMILES' in self.df.columns:
+                # 1. Préparation des index
                 unique_cats = self.df[smiles_col].unique()
                 cat_to_idx = {smile: i for i, smile in enumerate(unique_cats)}
                 unique_ans = self.df['Anion_SMILES'].unique()
@@ -547,39 +548,45 @@ class ILsScreening:
                 plot_df['Cation_Index'] = plot_df[smiles_col].map(cat_to_idx)
                 plot_df['Anion_Index'] = plot_df['Anion_SMILES'].map(an_to_idx)
                 
+                # 2. Filtrage
                 if len(unique_cats) > max_display or len(unique_ans) > max_display:
                     plot_df = plot_df[
                         (plot_df['Cation_Index'] < max_display) & 
                         (plot_df['Anion_Index'] < max_display)
                     ]
                 
+                # 3. Pivot
                 values_col = 'SAScore' if prop == 'sascore' else 'Predicted_Tm_C'
                 matrix = plot_df.pivot_table(index='Cation_Index', columns='Anion_Index', values=values_col)
                 
-                # Correction : on vérifie que la matrice n'est pas vide
-                if matrix.empty:
-                    print("⚠️ The resulting matrix is empty. Try a higher max_display.")
-                    return self
+                # 4. Remplissage des trous (NaN) pour éviter le blanc
+                # On utilise la moyenne de la matrice pour remplir les cases manquantes
+                if matrix.isnull().values.any():
+                    matrix = matrix.fillna(matrix.mean().mean())
 
                 plt.figure(figsize=(10, 8))
                 is_tm = (prop == 'tm')
                 
-                # On retire vmin/vmax pour laisser Seaborn gérer l'auto-scaling de base
+                # 5. Heatmap avec bornes forcées et palette Bleu-Rouge
                 sns.heatmap(
                     matrix, 
-                    cmap="coolwarm" if is_tm else "YlOrRd", 
-                    center=100 if is_tm else None,
+                    cmap="coolwarm", # Bleu -> Blanc -> Rouge
+                    vmin=-73.1,      # Ton min réel
+                    vmax=100.0,      # Ton max réel
+                    center=13.5,     # Point de pivot visuel (milieu entre -73 et 100)
                     annot=False,
                     cbar=True,
-                    cbar_kws={'label': 'Predicted Tm (°C)' if is_tm else 'SAScore'}
+                    cbar_kws={
+                        'label': 'Predicted Tm (°C)',
+                        'shrink': 0.8,
+                        'aspect': 20
+                    }
                 )
                 
-                plt.title(f"Property Matrix: {prop.upper()}")
+                plt.title(f"Property Matrix: {prop.upper()} (Indices)")
                 plt.xlabel("Anion Index")
                 plt.ylabel("Cation Index")
                 finalize_plot(save_path)
-            else:
-                print("⚠️ No Anions found.")
 
         # --- KIND: SIMILARITY (Tanimoto Structural Similarity) ---
         elif kind == 'similarity':
