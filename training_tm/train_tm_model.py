@@ -1,9 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[4]:
-
-
 import math
 import fractions
 fractions.gcd = math.gcd
@@ -16,17 +10,13 @@ from rdkit import Chem
 from mordred import Calculator, descriptors
 from sklearn.preprocessing import StandardScaler
 
-# --- 1. DATA & DESCRIPTORS LOADING -----------------------------------------
 
-# Load the benchmark dataset
 df_final = pd.read_csv('dataset/tm_data.csv')
 
-# Load external descriptor names from the production package
 with open('../ils_screening_tm/models/for-external.pkl', 'rb') as f:
     _ = pickle.load(f)                
     col_descriptors = pickle.load(f) 
 
-# Initialize Mordred calculator (ignoring 3D descriptors)
 calc = Calculator(descriptors, ignore_3D=True)
 
 def compute_209_descriptors(smiles_list):
@@ -41,21 +31,16 @@ X_cat_raw = compute_209_descriptors(df_final['Molecule1'])
 print("Calculating Mordred descriptors for Anions...")
 X_an_raw = compute_209_descriptors(df_final['Molecule2']) 
 
-# Concatenate features horizontally
 X_phys_raw = np.concatenate([X_cat_raw, X_an_raw], axis=1)
 
-# Fit and apply standard scaler
 scaler_phys = StandardScaler()
 X_phys_std = scaler_phys.fit_transform(X_phys_raw)
 
-# Save the scaler directly into the production package
 joblib.dump(scaler_phys, '../ils_screening_tm/models/scaler_mordred.pkl')
 
-# Split descriptors back into Cation and Anion sets
 X_cat_mordred = X_phys_std[:, :209]
 X_an_mordred = X_phys_std[:, 209:]
 
-# Target property (Melting point in Kelvin)
 y = df_final['mpK'].values
 
 print("\n=== DATA PREPARATION COMPLETED ===")
@@ -63,7 +48,6 @@ print(f"X_cat_mordred shape : {X_cat_mordred.shape} (209 features for Cation)")
 print(f"X_an_mordred shape  : {X_an_mordred.shape} (209 features for Anion)")
 print(f"Target y shape      : {y.shape}")
 
-# --- 2. DEEP LEARNING MODEL SETUP ------------------------------------------
 
 import tensorflow as tf
 from tensorflow.keras.layers import Input, Conv1D, MaxPooling1D, Flatten, Dense, Concatenate, Dropout, BatchNormalization, Reshape
@@ -72,7 +56,6 @@ from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from sklearn.model_selection import train_test_split, KFold
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
-# Train/Test Split (80% Train, 20% External Test Evaluation)
 idx = np.arange(len(y))
 idx_train, idx_test = train_test_split(idx, test_size=0.2, random_state=42)
 
@@ -87,7 +70,6 @@ y_test = y[idx_test]
 def build_pscnn():
     NB_FEATURES = 209
 
-    # Cation Branch
     input_cation = Input(shape=(NB_FEATURES,), name="Mordred_Cation")
     rc = Reshape((NB_FEATURES, 1))(input_cation)
     c = Conv1D(filters=32, kernel_size=7, activation='relu', padding='same')(rc)
@@ -96,7 +78,6 @@ def build_pscnn():
     c = MaxPooling1D(pool_size=2)(c)
     c = Flatten()(c)
 
-    # Anion Branch
     input_anion = Input(shape=(NB_FEATURES,), name="Mordred_Anion")
     ra = Reshape((NB_FEATURES, 1))(input_anion)
     a = Conv1D(filters=32, kernel_size=7, activation='relu', padding='same')(ra)
@@ -105,10 +86,8 @@ def build_pscnn():
     a = MaxPooling1D(pool_size=2)(a)
     a = Flatten()(a)
 
-    # Fusion of both structural branches
     fusion = Concatenate(name="Ion_Fusion")([c, a])
 
-    # Fully Connected Layers
     z = Dense(256, activation='relu')(fusion)
     z = BatchNormalization()(z)
     z = Dropout(0.3)(z)
@@ -125,7 +104,6 @@ def build_pscnn():
                   metrics=['mae'])
     return model
 
-# --- 3. K-FOLD CROSS VALIDATION & TRAINING ---------------------------------
 
 N_SPLITS = 5
 kf = KFold(n_splits=N_SPLITS, shuffle=True, random_state=42)
@@ -157,7 +135,6 @@ for train_index, val_index in kf.split(X_cat_train_full):
         verbose=0 
     )
     
-    # Save the trained fold model directly into the production package
     filename = f'../ils_screening_tm/models/pscnn_fold_{fold_no}.keras'
     model.save(filename)
     print(f"💾 Fold {fold_no} model successfully saved as: {filename}")
@@ -168,7 +145,6 @@ for train_index, val_index in kf.split(X_cat_train_full):
     
     fold_no += 1
 
-# --- 4. ENSEMBLE EVALUATION ------------------------------------------------
 
 y_pred_ensemble = np.mean(all_test_predictions, axis=0)
 
@@ -183,10 +159,5 @@ print(f" RMSE : {rmse_m:.4f} K")
 print(f" MAE  : {mae_m:.4f} K")
 print(f" R²   : {r2_m:.4f}")
 print("="*45)
-
-
-# In[ ]:
-
-
 
 

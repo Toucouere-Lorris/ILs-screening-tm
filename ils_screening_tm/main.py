@@ -35,7 +35,6 @@ except ImportError as exc:
     ) from exc
 
 
-# --- GLOBALS & STATIC UTILITIES -------------------------------------------
 
 FORBIDDEN_CONNECTIONS = {
     'N': ['F', 'Cl', 'Br', 'I', 'At', 'Ts', 'O', 'S', 'N'],
@@ -187,7 +186,6 @@ class CombinationEncoded:
                 logger.debug("Invalid substituent pattern '%s': %s", row.get('Pattern'), exc)
                 return False
 
-        # Vectorized validity mask instead of a manual iterrows loop.
         valid_mask = substituants_df.apply(is_valid_pattern, axis=1)
         sub_df = substituants_df[valid_mask].copy()
 
@@ -311,7 +309,6 @@ class CombinationEncoded:
         return results
 
 
-# --- 1. THE MAIN SCREENING CLASS ------------------------------------------
 import os
 import ils_screening_tm.data as data_module
 import ils_screening_tm.Models as models_module
@@ -321,16 +318,12 @@ class ILsScreening:
         self.df: Optional[pd.DataFrame] = None
         self.encoded_smiles: Optional[str] = None
 
-        # 1. Localiser le dossier 'data' physiquement sur le disque
         data_dir = os.path.dirname(os.path.abspath(data_module.__file__))
 
-        # 2. Définir les chemins des fichiers CSV
         self.fichier_cations = os.path.join(data_dir, 'base_cations.csv')
         self.fichier_substituants = os.path.join(data_dir, 'substituents_library.csv')
         self.fichier_anions = os.path.join(data_dir, 'anions_library.csv')
 
-        # 3. Localiser le dossier 'Models' physiquement sur le disque
-        # On utilise le module Models directement
         self.ch_models = os.path.dirname(os.path.abspath(models_module.__file__))
 
     def __repr__(self) -> str:
@@ -338,7 +331,6 @@ class ILsScreening:
         if self.df is None:
             return "ILsScreening Pipeline (Status: Empty Sandbox)"
 
-        # Détection dynamique de l'état d'avancement de la base
         if 'Predicted_Tm_C' in self.df.columns:
             status = f"Screened Library ({len(self.df)} salts with predicted Tm)"
         elif 'Anion_SMILES' in self.df.columns:
@@ -367,11 +359,8 @@ class ILsScreening:
         script without a scaffold set will therefore raise a ValueError in
         `.sascore()` rather than silently doing nothing.
         """
-        # --- RESET STRATEGIC ENTRY POINT ---
-        # Clears any existing dataframe memory from previous pipeline runs
         self.df = None
 
-        # 🛡️ SÉCURITÉ ABSOLUE DIRECTE : Recalcul forcé des chemins absolus au moment de l'appel
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self.fichier_cations = os.path.join(base_dir, 'data', 'base_cations.csv')
         self.fichier_substituants = os.path.join(base_dir, 'data', 'substituents_library.csv')
@@ -422,7 +411,6 @@ class ILsScreening:
         if self.df is None or ('SMILES' not in self.df.columns and 'Cation_SMILES' not in self.df.columns):
             raise ValueError("❌ Cation dataframe sequence empty or missing. Run .generation() first.")
 
-        # Si les molécules sont déjà associées aux anions, on ne fait rien pour éviter de dupliquer la matrice
         if 'Cation_SMILES' in self.df.columns and 'Anion_SMILES' in self.df.columns:
             return self
 
@@ -431,7 +419,6 @@ class ILsScreening:
 
         df_anions = pd.read_csv(self.fichier_anions)
 
-        # On prépare le dataframe des cations existants (en gardant le SAScore s'il a été calculé)
         cols_to_keep = ['SMILES']
         if 'SAScore' in self.df.columns:
             cols_to_keep.append('SAScore')
@@ -439,7 +426,6 @@ class ILsScreening:
         df_cat_prep = self.df[cols_to_keep].rename(columns={'SMILES': 'Cation_SMILES'})
         df_an_prep = df_anions[['SMILES']].rename(columns={'SMILES': 'Anion_SMILES'})
 
-        # Produit cartésien (Cross Join) pour créer toutes les combinaisons possibles de sels
         self.df = pd.merge(df_cat_prep, df_an_prep, how='cross')
         print(f"🔗 [Anion Pairing] Matrix built: Generated {len(self.df)} full salt configurations.")
 
@@ -471,9 +457,6 @@ class ILsScreening:
         X_phys_complet = np.concatenate([X_cat_raw, X_an_raw], axis=1)
         X_phys_std = mon_scaler.transform(X_phys_complet)
 
-        # Use the actual descriptor count from the loaded pickle instead of a
-        # hardcoded literal, so the slicing stays correct if the descriptor
-        # set used to train the scaler/models ever changes.
         n_desc = len(col_descriptors)
         X_cat_final = X_phys_std[:, :n_desc]
         X_an_final = X_phys_std[:, n_desc:]
@@ -487,24 +470,10 @@ class ILsScreening:
         self.df = self.df[self.df['Predicted_Tm_C'] <= threshold_c].copy()
         print(f"📉 [Tm Filter] {len(self.df)} / {before_count} liquid salts survived ceiling check (<= {threshold_c}°C).")
         return self
-
+    
     def plot(self, prop: str = 'auto', kind: str = 'hist', max_display: int = 50, save_path: str = None) -> "ILsScreening":
         """
         Generates diagnostic plots for the screening workflow.
-
-        Parameters:
-        -----------
-        prop : str, default 'auto'
-            The chemical or physical property to analyze ('sascore' or 'tm').
-        kind : str, default 'hist'
-            The visualization style:
-            - 'hist'      : Statistical distribution of the property.
-            - 'matrix'    : Heatmap grid of the property values (requires ILs).
-            - 'similarity': Tanimoto structural similarity matrix.
-        max_display : int, default 50
-            Maximum number of molecules to display in matrix or similarity plots.
-        save_path : str, default None
-            If provided, saves the figure to the specified path (e.g., 'plot.png').
         """
         import matplotlib.pyplot as plt
         import seaborn as sns
@@ -519,97 +488,94 @@ class ILsScreening:
         prop = prop.lower()
         kind = kind.lower()
         smiles_col = 'SMILES' if 'SMILES' in self.df.columns else 'Cation_SMILES'
-        
-        if prop == 'auto':
-            prop = 'tm' if 'Predicted_Tm_C' in self.df.columns else 'sascore'
 
-        # Helper to handle saving
+        if prop == 'auto':
+            if 'viscosity_Pa_s' in self.df.columns:
+                prop = 'viscosity'
+            elif 'Predicted_Tm_C' in self.df.columns:
+                prop = 'tm'
+            else:
+                prop = 'sascore'
+
         def finalize_plot(path):
             if path:
                 plt.savefig(path, dpi=300, bbox_inches='tight')
                 print(f"💾 [Plot] Figure saved to {path}")
             plt.show()
 
-        # --- KIND: HISTOGRAM (Statistical Distribution) ---
+        col_map = {'sascore': 'SAScore', 'tm': 'Predicted_Tm_C', 'viscosity': 'viscosity_Pa_s'}
+        col_to_plot = col_map.get(prop)
+
         if kind == 'hist':
-            col_to_plot = 'SAScore' if prop == 'sascore' else 'Predicted_Tm_C'
             if col_to_plot not in self.df.columns:
                 raise ValueError(f"❌ {col_to_plot} missing. Run .{prop}() first.")
-            
+
             plt.figure(figsize=(10, 5))
-            sns.histplot(data=self.df, x=col_to_plot, kde=True, color="teal", bins=20)
-            plt.title(f"Distribution of {col_to_plot}")
+            # Use log scale specifically for viscosity distribution
+            log_scale = (prop == 'viscosity')
+            sns.histplot(data=self.df, x=col_to_plot, kde=True, color="teal", bins=20, log_scale=log_scale)
+            plt.title(f"Distribution of {prop.upper()}")
             finalize_plot(save_path)
 
-        # --- KIND: MATRIX (Value Grid Heatmap) ---
         elif kind == 'matrix':
-            if 'Anion_SMILES' in self.df.columns:
-                # 1. Préparation des index
-                unique_cats = self.df[smiles_col].unique()
-                cat_to_idx = {smile: i for i, smile in enumerate(unique_cats)}
-                unique_ans = self.df['Anion_SMILES'].unique()
-                an_to_idx = {smile: i for i, smile in enumerate(unique_ans)}
-                
-                plot_df = self.df.copy()
-                plot_df['Cation_Index'] = plot_df[smiles_col].map(cat_to_idx)
-                plot_df['Anion_Index'] = plot_df['Anion_SMILES'].map(an_to_idx)
-                
-                # 2. Filtrage
-                if len(unique_cats) > max_display or len(unique_ans) > max_display:
-                    plot_df = plot_df[
-                        (plot_df['Cation_Index'] < max_display) & 
-                        (plot_df['Anion_Index'] < max_display)
-                    ]
-                
-                # 3. Pivot
-                values_col = 'SAScore' if prop == 'sascore' else 'Predicted_Tm_C'
-                matrix = plot_df.pivot_table(index='Cation_Index', columns='Anion_Index', values=values_col)
-                
-                # 4. Remplissage des trous (NaN) pour éviter le blanc
-                # On utilise la moyenne de la matrice pour remplir les cases manquantes
-                if matrix.isnull().values.any():
-                    matrix = matrix.fillna(matrix.mean().mean())
+            if 'Anion_SMILES' not in self.df.columns:
+                print("❌ 'matrix' plot requires Anion_SMILES.")
+                return self
+            if col_to_plot not in self.df.columns:
+                raise ValueError(f"❌ {col_to_plot} missing. Run .{prop}() first.")
 
-                plt.figure(figsize=(10, 8))
-                is_tm = (prop == 'tm')
-                
-                # 5. Heatmap avec bornes forcées et palette Bleu-Rouge
-                sns.heatmap(
-                    matrix, 
-                    cmap="coolwarm", # Bleu -> Blanc -> Rouge
-                    vmin=-73.1,      # Ton min réel
-                    vmax=100.0,      # Ton max réel
-                    center=13.5,     # Point de pivot visuel (milieu entre -73 et 100)
-                    annot=False,
-                    cbar=True,
-                    cbar_kws={
-                        'label': 'Predicted Tm (°C)',
-                        'shrink': 0.8,
-                        'aspect': 20
-                    }
-                )
-                
-                plt.title(f"Property Matrix: {prop.upper()} (Indices)")
-                plt.xlabel("Anion Index")
-                plt.ylabel("Cation Index")
-                finalize_plot(save_path)
+            unique_cats = self.df[smiles_col].unique()
+            cat_to_idx = {smile: i for i, smile in enumerate(unique_cats)}
+            unique_ans = self.df['Anion_SMILES'].unique()
+            an_to_idx = {smile: i for i, smile in enumerate(unique_ans)}
 
-        # --- KIND: SIMILARITY (Tanimoto Structural Similarity) ---
+            plot_df = self.df.copy()
+            plot_df['Cation_Index'] = plot_df[smiles_col].map(cat_to_idx)
+            plot_df['Anion_Index'] = plot_df['Anion_SMILES'].map(an_to_idx)
+
+            if len(unique_cats) > max_display or len(unique_ans) > max_display:
+                plot_df = plot_df[(plot_df['Cation_Index'] < max_display) & (plot_df['Anion_Index'] < max_display)]
+
+            matrix = plot_df.pivot_table(index='Cation_Index', columns='Anion_Index', values=col_to_plot)
+            if matrix.isnull().values.any():
+                matrix = matrix.fillna(matrix.mean().mean())
+
+            plt.figure(figsize=(10, 8))
+            is_tm = (prop == 'tm')
+            is_visc = (prop == 'viscosity')
+
+            sns.heatmap(
+                matrix,
+                cmap="viridis" if is_visc else "coolwarm",
+                vmin=-73.1 if is_tm else None,
+                vmax=100.0 if is_tm else None,
+                center=13.5 if is_tm else None,
+                annot=False,
+                cbar=True,
+                cbar_kws={'label': f'Predicted {prop.upper()}', 'shrink': 0.8}
+            )
+
+            plt.title(f"Property Matrix: {prop.upper()}")
+            plt.xlabel("Anion Index")
+            plt.ylabel("Cation Index")
+            finalize_plot(save_path)
+
         elif kind == 'similarity':
             unique_cats = self.df.drop_duplicates(subset=[smiles_col]).head(max_display)
             mols = [Chem.MolFromSmiles(s) for s in unique_cats[smiles_col]]
             fps = [AllChem.GetMorganFingerprintAsBitVect(m, 2, nBits=2048) for m in mols if m is not None]
-            
+
             sim_matrix = np.zeros((len(fps), len(fps)))
             for i in range(len(fps)):
                 for j in range(len(fps)):
                     sim_matrix[i, j] = DataStructs.TanimotoSimilarity(fps[i], fps[j])
 
             plt.figure(figsize=(10, 8))
-            # Added extent and labels to match the index-style matrix plot
-            sns.heatmap(sim_matrix, cmap="viridis", annot=False, xticklabels=range(len(fps)), yticklabels=range(len(fps)))
+            sns.heatmap(sim_matrix, cmap="viridis", annot=False)
             plt.title("Structural Similarity Matrix (Tanimoto Coefficients)")
             finalize_plot(save_path)
+
+        return self
 
     def show(self, sample_size: int = 4, random_state: Optional[int] = None) -> "ILsScreening":
         """Displays high-quality RDKit molecular grids without the pandas DataFrame table.
@@ -634,7 +600,6 @@ class ILsScreening:
 
         mols, legends = [], []
 
-        # Cas 1 : Après appariement (Colonnes Cation_SMILES et Anion_SMILES présentes)
         if 'Cation_SMILES' in self.df.columns and 'Anion_SMILES' in self.df.columns:
             print(f"🎨 Displaying {nb_echantillon} random Screened Salt Pairs (Left: Cation | Right: Anion):")
             for idx, row in df_sample.iterrows():
@@ -644,14 +609,13 @@ class ILsScreening:
                     mols.extend([mol_cat, mol_an])
                     sas_info = f" | SAS: {row['SAScore']:.1f}" if 'SAScore' in row else ""
                     tm_info = f" | Tm: {row['Predicted_Tm_C']:.1f}°C" if 'Predicted_Tm_C' in row else ""
-                    legends.extend([f"Cand {idx} - Cation{sas_info}{tm_info}", f"Cand {idx} - Anion"])
+                    visc_info = f" | η: {row['viscosity_Pa_s']:.3f} Pa·s" if 'viscosity_Pa_s' in row else ""
+                    legends.extend([f"Cand {idx} - Cation{sas_info}{tm_info}{visc_info}", f"Cand {idx} - Anion"])
 
             if mols:
-                # 2 molécules par ligne = 1 paire complète (Cation + Anion) par ligne de la grille
                 grid = Draw.MolsToGridImage(mols, molsPerRow=2, subImgSize=(300, 300), legends=legends)
                 display(grid)
 
-        # Cas 2 : Avant appariement (Seule la colonne SMILES des cations générés est présente)
         elif 'SMILES' in self.df.columns:
             print(f"🎨 Displaying {nb_echantillon} random generated Cations structures:")
             for idx, row in df_sample.iterrows():
@@ -662,11 +626,58 @@ class ILsScreening:
                     legends.append(f"Cation {idx}{sas_info}")
 
             if mols:
-                # Pour les cations seuls, on peut les afficher sur 3 colonnes pour économiser de l'espace
                 grid = Draw.MolsToGridImage(mols, molsPerRow=3, subImgSize=(250, 250), legends=legends)
                 display(grid)
 
         return self
+
+    def viscosity(self, temperature_K=298.15, pressure_kPa=101.325, threshold=None):
+        """
+        Predicts viscosity (Pa.s) for the generated compounds.
+        Optimization: Calculates molecular descriptors only once.
+        """
+        if self.df is None or "cation_smiles" not in self.df.columns or "anion_smiles" not in self.df.columns:
+            print("Error: Generate salts first using .generation() or .sascore().")
+            return
+
+        if "_mol_feats" not in self.df.columns:
+            print("⏳ Calculating molecular descriptors (one-time operation)...")
+            df_temp = self.df.copy()
+            df_temp["compound_smiles"] = df_temp["cation_smiles"] + "." + df_temp["anion_smiles"]
+            df_temp["_clean_smiles"] = df_temp["compound_smiles"].apply(clean_smiles)
+
+            unique_smiles = df_temp["_clean_smiles"].unique()
+            feat_map = {smi: featurize_smiles(smi) for smi in unique_smiles if smi is not None}
+            self.df["_mol_feats"] = df_temp["_clean_smiles"].map(feat_map)
+
+            self.df = self.df[self.df["_mol_feats"].notna()].reset_index(drop=True)
+
+        X_mol = pd.DataFrame(self.df["_mol_feats"].tolist())
+
+        X_mol["temperature_K"] = temperature_K
+        X_mol["inv_temperature_K"] = 1.0 / temperature_K
+        X_mol["log10_pressure_kPa"] = np.log10(pressure_kPa)
+
+        if not hasattr(self, '_visc_model_artifacts'):
+            model_path = os.path.join(self.ch_models, 'lgbm_viscosity_production.pkl')
+            with open(model_path, 'rb') as f:
+                self._visc_model_artifacts = pickle.load(f)
+
+        model = self._visc_model_artifacts["model"]
+        scaler = self._visc_model_artifacts["scaler"]
+        cols_to_scale = self._visc_model_artifacts["cols_to_scale"]
+
+        X_full = X_mol[self._visc_model_artifacts["feature_names"]]
+
+        X_scaled = X_full.copy()
+        X_scaled[cols_to_scale] = scaler.transform(X_full[cols_to_scale])
+
+        log_visc_pred = model.predict(X_scaled)
+        self.df["viscosity_Pa_s"] = 10**log_visc_pred
+
+        if threshold is not None:
+            self.df = self.df[self.df["viscosity_Pa_s"] <= threshold].reset_index(drop=True)
+            print(f"Filtering applied: {len(self.df)} salts remaining.")
 
     def save(self, filename: str, columns: list = None):
         """
