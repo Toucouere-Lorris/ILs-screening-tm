@@ -18,6 +18,7 @@ from rdkit import Chem
 from rdkit.Chem import AllChem, Draw, RDConfig
 from mordred import Calculator, descriptors
 from tensorflow.keras.models import load_model
+from training_viscosity.Viscosity import clean_smiles, featurize_smiles
 
 warnings.filterwarnings('ignore', category=UserWarning)
 warnings.filterwarnings('ignore', message=".*SettingWithCopyWarning.*")
