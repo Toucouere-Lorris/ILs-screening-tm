@@ -10,3 +10,4 @@ build/
 output/
 tests/.~lock.*
 tests/tototo.ipynb
+*.swp
