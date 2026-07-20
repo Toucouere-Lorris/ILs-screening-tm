@@ -636,14 +636,16 @@ class ILsScreening:
         Predicts viscosity (Pa.s) for the generated compounds.
         Optimization: Calculates molecular descriptors only once.
         """
-        if self.df is None or "cation_smiles" not in self.df.columns or "anion_smiles" not in self.df.columns:
-            print("Error: Generate salts first using .generation() or .sascore().")
+        # Mise à jour des noms de colonnes avec majuscules (Cation_SMILES / Anion_SMILES)
+        if self.df is None or "Cation_SMILES" not in self.df.columns or "Anion_SMILES" not in self.df.columns:
+            print("❌ Error: Generate salt pairs first using .pair_with_anions().")
             return
 
         if "_mol_feats" not in self.df.columns:
             print("⏳ Calculating molecular descriptors (one-time operation)...")
             df_temp = self.df.copy()
-            df_temp["compound_smiles"] = df_temp["cation_smiles"] + "." + df_temp["anion_smiles"]
+            # Mise à jour des noms de colonnes
+            df_temp["compound_smiles"] = df_temp["Cation_SMILES"] + "." + df_temp["Anion_SMILES"]
             df_temp["_clean_smiles"] = df_temp["compound_smiles"].apply(clean_smiles)
 
             unique_smiles = df_temp["_clean_smiles"].unique()
