@@ -18,27 +18,22 @@ The repository is organized into distinct structural layers following software d
 
 ```text
 Git/
-├── ils_screening_tm/          # Core production Python package
+├── ils_screening_tm/         # Core production Python package
 │   ├── __init__.py
-│   ├── main.py                # Class ILsScreening, Pipeline orchestrator & UI (ipywidgets)
-│   │
-│   ├── data/                  # Fixed chemical source libraries
-│   │   ├── base_cations.csv
-│   │   ├── substituents_library.csv
-│   │   └── anions_library.csv
-│   │
-│   └── Models/                # Deep learning weights & feature scalers
-│       ├── pscnn_fold_1.keras ... pscnn_fold_5.keras
-│       ├── scaler_mordred.pkl
-│       └── for-external.pkl
+│   ├── main.py               # Class ILsScreening, Pipeline orchestrator & UI (ipywidgets)
+│   ├── data/                 # Fixed chemical source libraries
+│   └── Models/               # Deep learning weights & feature scalers (PSCNN, LightGBM)
 │
-├── tests/                     # Interactive testing & Validation notebooks
-│   └── test_pipeline.ipynb    # Demo notebook to launch the UI
+├── training_viscosity/       # Viscosity model logic and utilities
+│   └── Viscosity.py          # Descriptor pipeline & feature engineering
 │
-├── training/                  # Research environment for model development
+├── tests/                    # Interactive testing & Validation notebooks
+│   └── test_pipeline.ipynb   # Demo notebook to launch the UI
+│
+├── training/                 # Research environment for model development
 │   ├── dataset/
-│   │   └── tm_data.csv        # Curated experimental benchmark training set
-│   └── train_tm_model.py      # Dual-Input Parallel-Scaffold CNN training script
+│   │   └── tm_data.csv       # Curated experimental benchmark training set
+│   └── train_tm_model.py     # Dual-Input Parallel-Scaffold CNN training script
 │
 ├── pyproject.toml
 └── README.md
@@ -46,7 +41,7 @@ Git/
 
 ## ⚙ The Screening Pipeline Workflow
 
-The package orchestrates a sequential pipeline using an object-oriented API with method chaining (`.generation().sascore().tm()`). All calculations modify an internal `self.df` state registry in memory, bypassing unnecessary disk read/write overhead:
+The package orchestrates a sequential pipeline using an object-oriented API with method chaining (e.g., `.generation().sascore().tm().viscosity()`). All calculations modify an internal `self.df` state registry in memory, bypassing unnecessary disk read/write overhead:
 
 ### 1. Scaffold Selection & UI Interaction (`.generation()`)
 * **Interactive Trigger:** Launches the interactive `ipywidgets` environment to choose a base cation, configure anchor sites, and define substituent groups.
@@ -56,12 +51,12 @@ The package orchestrates a sequential pipeline using an object-oriented API with
 * Computes SAScores (via RDKit contributions) and enforces a strict synthesis gate (default `threshold=6.0`) to discard overly complex entities.
 * Automatically triggers a cross-join with the package's internal anion library to build the complete salt matrix.
 
-### 3. Deep Learning $T_m$ Prediction (`.tm()`)
-* Computes Mordred structural descriptors and feeds data into a 5-Fold Cross-Validation Ensemble of Parallel-Scaffold Convolutional Neural Networks (PSCNN).
-* Applies a room-temperature/low-melting screening threshold (default $T_m \le 100^\circ\text{C}$).
+### 3. Property Prediction Suite (`.tm()` & `.viscosity()`)
+* **Deep Learning $T_m$ Prediction (`.tm()`):** Computes Mordred structural descriptors and feeds data into a 5-Fold Cross-Validation Ensemble of Parallel-Scaffold Convolutional Neural Networks (PSCNN). Applies a room-temperature/low-melting screening threshold (default $T_m \le 100^\circ\text{C}$).
+* **Machine Learning Viscosity Prediction (`.viscosity()`):** Performs on-the-fly descriptor featurization and utilizes a calibrated **LightGBM** regressor to predict dynamic viscosity ($\eta$) as a function of temperature and pressure. Supports threshold-based pruning of candidates to enforce hydrodynamic constraints.
 
 ### 4. Advanced Diagnostics & Visual Reporting (`.plot()`)
-* **Multi-Modal Analytics:** Supports diverse representations including `hist` for property distributions, `similarity` for structural clustering, and `matrix` for comparative property grid screening.
+* **Multi-Modal Analytics:** Supports diverse representations including `hist` for property distributions (e.g., $T_m, \eta$), `similarity` for structural clustering, and `matrix` for comparative property grid screening.
 * **Automated Rendering:** Dynamically handles data scaling, labeling, and layout finalization for publication-quality visual output.
 
 ### 5. Data Serialization & Persistence (`.save()` & `.load()`)
@@ -110,22 +105,6 @@ ils = ILsScreening()
 
 # Launch the interactive interface
 ils.generation()
-```
-
-### 2. Running a Standalone Python Script (Bypassing UI)
-You can entirely bypass the graphical dashboard for non-interactive automated scripts or massive workflows by pre-defining a target atom-mapped scaffold string:
-
-```python
-from ils_screening_tm.main import ILsScreening
-
-# Fluent method chaining
-ils = ILsScreening()
-ils.set_scaffold("C1=[N+]([*:201])CCN1[*:202]") \
-   .generation(limit_nb=2) \
-   .sascore(threshold=5.5) \
-   .tm(threshold_c=80.0) \
-   .heatmap(mode='tm') \
-   .show(sample_size=4)
 ```
 
 ## 📦 Installation & Local Usage
