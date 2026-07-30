@@ -420,9 +420,16 @@ class ILsScreening:
         print(f"✂️ [SAScore Filter] {len(self.df)} / {before_count} cations retained under threshold (<= {threshold}).")
         return self
 
-    def pair_with_anions(self) -> "ILsScreening":
+    def pair_with_anions(self, max_anions: Optional[int] = None, random_state: Optional[int] = None) -> "ILsScreening":
         """Intermediate Core Step: Couples survived cations matrices against the raw anion dataset.
         Enables fluent chaining and standalone pairing analysis.
+        
+        Parameters:
+        -----------
+        max_anions : Optional[int], default None
+            If specified, randomly samples a subset of anions up to this limit to control combinatorial explosion.
+        random_state : Optional[int], default None
+            Seed for reproducible random sampling of anions.
         """
         if self.df is None or ('SMILES' not in self.df.columns and 'Cation_SMILES' not in self.df.columns):
             raise ValueError("❌ Cation dataframe sequence empty or missing. Run .generation() first.")
@@ -435,6 +442,11 @@ class ILsScreening:
 
         df_anions = pd.read_csv(self.fichier_anions)
 
+        # Filtrage/échantillonnage aléatoire des anions si max_anions est défini
+        if max_anions is not None and len(df_anions) > max_anions:
+            df_anions = df_anions.sample(n=max_anions, random_state=random_state).reset_index(drop=True)
+            print(f"🎲 [Anion Sampling] Randomly restricted anion library to {max_anions} candidates.")
+
         cols_to_keep = ['SMILES']
         if 'SAScore' in self.df.columns:
             cols_to_keep.append('SAScore')
@@ -445,7 +457,7 @@ class ILsScreening:
         self.df = pd.merge(df_cat_prep, df_an_prep, how='cross')
         print(f"🔗 [Anion Pairing] Matrix built: Generated {len(self.df)} full salt configurations.")
 
-        return self  # <-- TRÈS IMPORTANT : Permet le chaînage fluide
+        return self
 
     def tm(self, threshold_c: float = 100.0) -> "ILsScreening":
         """Step 3: Extracts molecular descriptors and returns deep learning melting points predictions."""
