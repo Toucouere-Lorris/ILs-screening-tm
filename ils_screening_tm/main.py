@@ -259,6 +259,7 @@ class CombinationEncoded:
                     (1, sorted(groups_by_type["Z"]), cZ),
                 ]
 
+                success = True
                 for type_int, unique_groups, chosen_comb in tasks:
                     if not unique_groups:
                         continue
@@ -266,29 +267,43 @@ class CombinationEncoded:
                         target_iso = 10000 + (type_int * 100) + grp_id
                         sub_mol = Chem.MolFromSmiles(pattern) if typ == 'SMILES' else Chem.MolFromSmarts(pattern)
                         if not sub_mol:
-                            continue
+                            success = False
+                            break
 
-                        target_idx = next((at.GetIdx() for at in mol.GetAtoms() if at.GetIsotope() == target_iso), None)
-                        if target_idx is None:
-                            continue
+                        # Boucle pour remplacer tous les atomes de la même classe un par un
+                        while True:
+                            target_idx = next((at.GetIdx() for at in mol.GetAtoms() if at.GetIsotope() == target_iso), None)
+                            if target_idx is None:
+                                break
 
-                        rw = Chem.RWMol(mol)
-                        rw.GetAtomWithIdx(target_idx).SetIsotope(999)
-                        res = AllChem.ReplaceSubstructs(
-                            rw.GetMol(), Chem.MolFromSmarts("[999*]"), sub_mol,
-                            replacementConnectionPoint=0,
-                        )
-                        if res:
-                            mol = res[0]
-                            try:
-                                Chem.SanitizeMol(mol)
-                            except Exception as exc:
-                                logger.debug(
-                                    "Sanitization failed mid-substitution (grp %s, pattern '%s'): %s",
-                                    grp_id, pattern, exc,
-                                )
+                            rw = Chem.RWMol(mol)
+                            rw.GetAtomWithIdx(target_idx).SetIsotope(999)
+                            res = AllChem.ReplaceSubstructs(
+                                rw.GetMol(), Chem.MolFromSmarts("[999*]"), sub_mol,
+                                replacementConnectionPoint=0,
+                            )
+                            if res:
+                                mol = res[0]
+                                try:
+                                    Chem.SanitizeMol(mol)
+                                except Exception as exc:
+                                    logger.debug(
+                                        "Sanitization failed mid-substitution (grp %s, pattern '%s'): %s",
+                                        grp_id, pattern, exc,
+                                    )
+                            else:
+                                success = False
+                                break
+
+                        if not success:
+                            break
                         legend_parts.append(pattern)
+                    if not success:
+                        break
 
+                if not success:
+                    self.stats.exclus_erreur += 1
+                    continue
                 if check_final_smarts_filter(mol):
                     smi = Chem.MolToSmiles(mol)
                     clean_mol = Chem.MolFromSmiles(smi)
